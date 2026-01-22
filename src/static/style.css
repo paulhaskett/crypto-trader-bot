@@ -1,0 +1,103 @@
+/* Custom styles for the Crypto Trading Bot Dashboard */
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.card {
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border: none;
+    border-radius: 8px;
+}
+
+.card-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    font-weight: 600;
+}
+
+.metric-card {
+    transition: all 0.3s ease;
+}
+
+.metric-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 5px;
+}
+
+.status-online { background-color: #28a745; }
+.status-warning { background-color: #ffc107; }
+.status-danger { background-color: #dc3545; }
+
+.pnl-positive { color: #28a745; font-weight: bold; }
+.pnl-negative { color: #dc3545; font-weight: bold; }
+.pnl-neutral { color: #6c757d; }
+
+.btn-custom {
+    border-radius: 20px;
+    padding: 8px 16px;
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0, 123, 255, 0.05);
+}
+
+.badge {
+    font-size: 0.75em;
+}
+
+.progress {
+    height: 20px;
+    border-radius: 10px;
+}
+
+.alert {
+    border-radius: 8px;
+    border: none;
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container {
+        padding-left: 15px;
+        padding-right: 15px;
+    }
+
+    .card-body {
+        padding: 1rem;
+    }
+}
+
+/* Animation for status updates */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.status-update {
+    animation: fadeIn 0.5s ease-in;
+}
+
+/* Custom button styles */
+.btn-dashboard {
+    background: linear-gradient(45deg, #007bff, #0056b3);
+    border: none;
+    color: white;
+}
+
+.btn-dashboard:hover {
+    background: linear-gradient(45deg, #0056b3, #004085);
+    color: white;
+}

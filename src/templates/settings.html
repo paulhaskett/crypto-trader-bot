@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Crypto Trading Bot</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-robot"></i> Crypto Trading Bot
+            </a>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/">
+                            <i class="fas fa-tachometer-alt"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/trades">
+                            <i class="fas fa-exchange-alt"></i> Trades
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/performance">
+                            <i class="fas fa-chart-line"></i> Performance
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/models">
+                            <i class="fas fa-brain"></i> AI Models
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/settings">
+                            <i class="fas fa-cogs"></i> Settings
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <h2><i class="fas fa-cogs"></i> Bot Settings & Configuration</h2>
+            </div>
+        </div>
+
+        <!-- Trading Mode -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Trading Mode</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-{{ 'success' if paper_trading else 'danger' }}">
+                            <h6>Current Mode: <strong>{{ 'Paper Trading' if paper_trading else 'Live Trading' }}</strong></h6>
+                            {% if paper_trading %}
+                                <p>The bot is currently in safe paper trading mode. No real money is at risk.</p>
+                            {% else %}
+                                <p class="text-danger"><strong>WARNING:</strong> The bot is trading with real money!</p>
+                            {% endif %}
+                        </div>
+                        <div class="form-check form-switch mt-3">
+                            <input class="form-check-input" type="checkbox" id="tradingModeToggle"
+                                   {{ 'checked' if not paper_trading else '' }}>
+                            <label class="form-check-label" for="tradingModeToggle">
+                                Enable Live Trading Mode
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Display Settings -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Display Settings</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Display Currency</label>
+                                    <select id="settingsCurrencySelector" class="form-select" onchange="changeSettingsCurrency(this.value)">
+                                        <option value="USD" {{ 'selected' if display_currency == 'USD' else '' }}>USD - US Dollar</option>
+                                        <option value="GBP" {{ 'selected' if display_currency == 'GBP' else '' }}>GBP - British Pound</option>
+                                    </select>
+                                    <small class="text-muted">Currency for displaying portfolio values and prices</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Current Exchange Rate</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text">1 USD =</span>
+                                        <input type="text" class="form-control" id="exchangeRateDisplay" readonly>
+                                        <span class="input-group-text">GBP</span>
+                                    </div>
+                                    <small class="text-muted">Real-time exchange rate (updates hourly)</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Management Settings -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Risk Management Settings</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <label class="form-label">Max Position Size</label>
+                                    <div class="input-group">
+                                        <input type="number" class="form-control" value="{{ settings.max_position_size }}" step="0.01" readonly>
+                                        <span class="input-group-text">%</span>
+                                    </div>
+                                    <small class="text-muted">Maximum % of portfolio per trade</small>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <label class="form-label">Max Daily Trades</label>
+                                    <input type="number" class="form-control" value="{{ settings.max_daily_trades }}" readonly>
+                                    <small class="text-muted">Maximum trades per day</small>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <label class="form-label">Max Concurrent Positions</label>
+                                    <input type="number" class="form-control" value="{{ settings.max_concurrent_positions }}" readonly>
+                                    <small class="text-muted">Maximum open positions at once</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-3">
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="dailyLossToggle" disabled>
+                                    <label class="form-check-label" for="dailyLossToggle">
+                                        Enable Daily Loss Limit ({{ settings.max_daily_loss * 100 }}%)
+                                    </label>
+                                </div>
+                                <small class="text-muted">Stop trading if daily loss exceeds limit</small>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="maxPositionsToggle" disabled>
+                                    <label class="form-check-label" for="maxPositionsToggle">
+                                        Limit Concurrent Positions (max: {{ settings.max_concurrent_positions }})
+                                    </label>
+                                </div>
+                                <small class="text-muted">Limit maximum number of open positions</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Model Settings -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>AI Model Settings</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">AI Confidence Threshold</label>
+                                    <div class="input-group">
+                                        <input type="number" class="form-control" value="{{ settings.model_confidence_threshold }}" step="0.05" readonly>
+                                        <span class="input-group-text">%</span>
+                                    </div>
+                                    <small class="text-muted">Minimum confidence for trades</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Stop Loss ATR Multiplier</label>
+                                    <input type="number" class="form-control" value="{{ settings.stop_loss_atr_multiplier }}" step="0.1" readonly>
+                                    <small class="text-muted">ATR-based stop loss multiplier</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-3">
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="aiConfidenceToggle" disabled>
+                                    <label class="form-check-label" for="aiConfidenceToggle">
+                                        High Confidence Mode ({{ settings.model_confidence_threshold * 100 }}%)
+                                    </label>
+                                </div>
+                                <small class="text-muted">Only trade with high AI confidence</small>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="autoRetrainToggle" disabled>
+                                    <label class="form-check-label" for="autoRetrainToggle">
+                                        Auto-Retrain Models
+                                    </label>
+                                </div>
+                                <small class="text-muted">Automatically retrain AI models weekly</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trading Pairs -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Trading Pairs</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>Currently configured trading pairs:</p>
+                        <div class="row">
+                            {% for product in settings.products %}
+                            <div class="col-md-2 mb-2">
+                                <span class="badge bg-primary fs-6">{{ product }}</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Controls -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>System Controls</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="emergencyStopToggle" 
+                                               {{ 'checked' if emergency_stop else '' }}>
+                                        <label class="form-check-label" for="emergencyStopToggle">
+                                            Emergency Stop
+                                        </label>
+                                    </div>
+                                    <small class="text-muted">⚠️ Immediately stops all trading and closes positions</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="debugModeToggle" disabled>
+                                        <label class="form-check-label" for="debugModeToggle">
+                                            Debug Mode
+                                        </label>
+                                    </div>
+                                    <small class="text-muted">Enable verbose logging for troubleshooting</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-3">
+                            <div class="col-md-12">
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-warning" onclick="controlBot('retrain_models')">
+                                        <i class="fas fa-brain"></i> Retrain AI Models
+                                    </button>
+                                    <button class="btn btn-info" onclick="location.reload()">
+                                        <i class="fas fa-sync-alt"></i> Refresh Status
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Status -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>System Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <strong>Market Check Interval:</strong>
+                                    <span class="text-muted">{{ settings.market_check_interval }} seconds</span>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <strong>Trading Pairs:</strong>
+                                    <span class="text-muted">{{ settings.products | length }} configured</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        function showNotification(message, type) {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type} alert-dismissible fade show position-fixed mt-3`;
+            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            notification.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            document.body.appendChild(notification);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 5000);
+        }
+
+        function changeSettingsCurrency(currency) {
+            fetch('/api/settings/display_currency', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: currency })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showNotification(`Currency changed to ${currency}`, 'success');
+                    location.reload(); // Reload to update all displayed values
+                } else {
+                    showNotification(`Failed to change currency: ${data.message}`, 'danger');
+                }
+            })
+            .catch(error => {
+                showNotification(`Error changing currency: ${error}`, 'danger');
+            });
+        }
+
+        function updateExchangeRate() {
+            fetch('/api/exchange_rate')
+                .then(response => response.json())
+                .then(data => {
+                    const rateDisplay = document.getElementById('exchangeRateDisplay');
+                    if (rateDisplay && data.rate) {
+                        rateDisplay.value = data.rate.toFixed(4);
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to fetch exchange rate:', error);
+                });
+        }
+
+        function controlBot(action) {
+            let confirmMessage = '';
+            switch(action) {
+                case 'enable_live_trading':
+                    confirmMessage = '⚠️ WARNING: This will enable LIVE trading with REAL MONEY! Are you sure?';
+                    break;
+                case 'switch_to_paper_trading':
+                    confirmMessage = 'Switch to paper trading mode? This will stop using real money.';
+                    break;
+                default:
+                    confirmMessage = `Are you sure you want to ${action.replace('_', ' ')}?`;
+            }
+
+            if (confirm(confirmMessage)) {
+                fetch(`/api/control/${action}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        location.reload();
+                    } else {
+                        alert('Error: ' + (data.message || 'Operation failed'));
+                    }
+                })
+                .catch(error => {
+                    alert('Network error: ' + error.message);
+                });
+            }
+        }
+
+        document.getElementById('tradingModeToggle').addEventListener('change', function() {
+            const action = this.checked ? 'enable_live_trading' : 'switch_to_paper_trading';
+            controlBot(action);
+        });
+
+        document.getElementById('emergencyStopToggle').addEventListener('change', function() {
+            if (this.checked) {
+                controlBot('emergency_stop');
+            } else {
+                // Reset emergency stop
+                fetch('/api/control/reset_emergency_stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        location.reload();
+                    } else {
+                        alert('Error: ' + (data.message || 'Failed to reset emergency stop'));
+                    }
+                });
+            }
+        });
+
+        // Initialize exchange rate on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateExchangeRate();
+        });
+    </script>
+</body>
+</html>
