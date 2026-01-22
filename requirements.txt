@@ -1,0 +1,16 @@
+# Requirements for Crypto Trading Bot
+# Core dependencies for Coinbase API integration and data handling
+pandas                      # Data manipulation and analysis
+numpy                       # Numerical computing
+scikit-learn                # Machine learning algorithms
+fastapi                     # Web framework for API/dashboard
+uvicorn[standard]             # ASGI server for FastAPI with WebSocket support
+python-dotenv               # Environment variable management
+SQLAlchemy                  # Database ORM
+APScheduler                 # Task scheduling
+jinja2                      # Template engine for web dashboard
+requests                    # HTTP requests for exchange rates
+coinbase-commerce            # Coinbase API integration
+ecdsa                       # ECDSA cryptography for Advanced Trade API
+PyJWT                       # JSON Web Tokens for API authentication
+coinbase-advanced-py          # Official Coinbase CDP SDK for proper API integration
