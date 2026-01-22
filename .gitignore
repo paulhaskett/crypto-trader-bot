@@ -1,0 +1,98 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codab]$a
+*.pyd
+.Python[build]/
+*.so
+
+# Distribution / packaging
+.Python[build]/
+build/
+dist/
+*.egg
+*.egg-info/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# API Keys and Secrets (CRITICAL - NEVER COMMIT)
+api_keys.env
+config/api_keys.env
+
+# Model Files (TOO LARGE FOR GIT)
+models/*.pkl
+models/*.scaler
+models/
+
+# Data Files (LARGE, CAN BE EXCLUDED)
+data/*.db
+data/*.sqlite
+data/logs/
+
+# Logs (CAN BE EXCLUDED)
+logs/*.log
+logs/trades/*.log
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Backup files
+*.bak
+*.backup
+
+# Temporary files
+tmp/
+temp/
+
+# Session files
+session-*.md
+
+# GitHub specific
+.github/
+!.github/
+!git/
