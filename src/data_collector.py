@@ -274,8 +274,10 @@ class DataCollector:
             Dictionary of feature values for model prediction
         """
         try:
+            logger.info(f"Getting latest features for {product_id}")
             # Get recent data
             df = self.collect_historical_data(product_id, days=7)
+            logger.info(f"Historical data for {product_id}: {len(df)} rows")
 
             if df.empty:
                 logger.warning(f"No data available for {product_id}")

@@ -284,9 +284,12 @@ class AIModel:
             Dictionary with prediction results
         """
         try:
+            logger.info(f"Predicting for {product_id}")
             if product_id not in self.models:
+                logger.info(f"Model not in memory for {product_id}, loading from disk")
                 # Try to load model from disk
                 if not self._load_model(product_id):
+                    logger.error(f'Failed to load model for {product_id}')
                     return {
                         'success': False,
                         'error': f'No trained model for {product_id}',
@@ -295,9 +298,12 @@ class AIModel:
                     }
 
             # Get latest features
+            logger.info(f"Getting features for {product_id}")
             features = data_collector.get_latest_features(product_id)
+            logger.info(f"Features for {product_id}: {len(features)} features available")
 
             if not features:
+                logger.error(f'Could not get features for {product_id}')
                 return {
                     'success': False,
                     'error': f'Could not get features for {product_id}',
