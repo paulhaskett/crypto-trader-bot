@@ -624,39 +624,6 @@
 
         console.log('Dashboard loaded - controlBot available:', typeof window.controlBot);
     </script>
-        });
-
-        // Exchange rate update function
-        async function updateExchangeRate() {
-            try {
-                const response = await fetch('/api/portfolio/debug');
-                const data = await response.json();
-
-                if (data.exchange_rate) {
-                    const rate = data.exchange_rate.usd_to_display;
-                    const age = data.exchange_rate.age_minutes;
-
-                    document.getElementById('exchange-rate').textContent =
-                        '1 USD = ' + rate.toFixed(4) + ' GBP';
-
-                    document.getElementById('rate-age').textContent =
-                        age ? 'Updated ' + Math.round(age) + ' min ago' : 'Age unknown';
-
-                    console.log('Exchange rate updated: ' + rate + ', age: ' + age + ' min');
-                } else if (data.error) {
-                    document.getElementById('exchange-rate').textContent = 'Error loading rate';
-                    document.getElementById('rate-age').textContent = data.error;
-                }
-            } catch (error) {
-                console.error('Failed to fetch exchange rate:', error);
-                document.getElementById('exchange-rate').textContent = 'Connection error';
-                document.getElementById('rate-age').textContent = 'Retry later';
-            }
-        }
-
-        // Update exchange rate on page load and every 2 minutes (more frequent for rapidly changing rates)
-        updateExchangeRate();
-        setInterval(updateExchangeRate, 2 * 60 * 1000);
 
         // Update portfolio values immediately on page load and every 30 seconds
 
