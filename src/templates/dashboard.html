@@ -803,14 +803,8 @@
             });
         };
 
-        window.controlBot = async function(action) {
-            console.log('🎮 controlBot called with action:', action);
-
-            // Prevent multiple rapid clicks
-            if (window.controlBot.processing) {
-                console.log('⚠️ Already processing, ignoring duplicate click');
-                return;
-            }
+        window.controlBot = function(action) {
+            console.log('Control bot called with action:', action);
 
             let confirmMessage = '';
             switch(action) {
@@ -821,56 +815,31 @@
                     confirmMessage = 'Are you sure you want to stop automated trading?';
                     break;
                 case 'emergency_stop':
-                    confirmMessage = '⚠️ EMERGENCY STOP: This will immediately stop all trading!';
+                    confirmMessage = 'EMERGENCY STOP: This will immediately stop all trading!';
                     break;
                 default:
-                    confirmMessage = `Are you sure you want to ${action.replace('_', ' ')}?`;
+                    confirmMessage = 'Are you sure you want to ' + action.replace('_', ' ') + '?';
             }
 
             if (confirm(confirmMessage)) {
-                window.controlBot.processing = true;
-
-                try {
-                    console.log('🚀 Sending control request...');
-                    const response = await fetch(`/api/control/${action}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        signal: AbortSignal.timeout(10000) // 10 second timeout
-                    });
-
-                    const data = await response.json();
-
+                console.log('Sending control request...');
+                fetch('/api/control/' + action, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Action completed:', action, data);
                     if (data.status === 'success') {
-                        console.log('✅ Action completed:', action);
-
-                        // Update trading state if returned
-                        if (data.trading_active !== undefined) {
-                            extensionManager.callFunction('updateTradingStatus', data.trading_active);
-                        }
-
-                        // Update trading mode if returned
-                        if (data.paper_trading !== undefined) {
-                            extensionManager.callFunction('updateTradingMode', data.paper_trading);
-                        }
-
-                        // Show success notification
                         extensionManager.callFunction('showNotification', data.message, 'success');
-
                     } else {
-                        console.error('❌ Action failed:', data.message);
-                        extensionManager.callFunction('showNotification', data.message, 'danger');
+                        extensionManager.callFunction('showNotification', data.message || 'Action failed', 'danger');
                     }
-
-                } catch (error) {
-                    console.error('❌ Network error:', error);
-                    if (error.name === 'TimeoutError') {
-                        extensionManager.callFunction('showNotification', 'Request timed out. Please try again.', 'warning');
-                    } else {
-                        extensionManager.callFunction('showNotification', 'Network error occurred', 'danger');
-                    }
-                } finally {
-                    window.controlBot.processing = false;
-                }
+                })
+                .catch(error => {
+                    console.error('Network error:', error);
+                    extensionManager.callFunction('showNotification', 'Network error occurred', 'danger');
+                });
             }
         };
         console.log('✅ controlBot function defined and available');
@@ -1037,10 +1006,10 @@
             const notification = document.createElement('div');
             notification.className = `alert alert-${type} alert-dismissible fade show position-fixed mt-3`;
             notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
-            notification.innerHTML = `
-                ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            `;
+            // Safe HTML construction - escape message content to prevent syntax errors
+            const safeMessage = String(message).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            notification.innerHTML = safeMessage +
+                '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
             document.body.appendChild(notification);
 
             // Auto-remove after 5 seconds
