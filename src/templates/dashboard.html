@@ -775,34 +775,7 @@
             }
         }
 
-        // Global function definitions - enhanced with extension resistance
-        window.testFunctions = function() {
-            console.log('✅ Enhanced JavaScript functions loaded successfully!');
-            extensionManager.callFunction('showNotification', 'JavaScript is working! All functions are loaded with extension resistance.', 'success');
-            return true;
-        };
-
-        window.changeCurrency = function(currency) {
-            console.log('changeCurrency called with:', currency);
-            fetch('/api/settings/display_currency', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ value: currency })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    console.log('Currency changed successfully to:', currency);
-                    setTimeout(() => location.reload(), 100);
-                } else {
-                    console.error('Currency change failed:', data.message);
-                }
-            })
-            .catch(error => {
-                console.error('Network error:', error);
-            });
-        };
-
+        // Simplified function definitions - no extension manager complexity
         window.controlBot = function(action) {
             console.log('Control bot called with action:', action);
 
@@ -822,7 +795,6 @@
             }
 
             if (confirm(confirmMessage)) {
-                console.log('Sending control request...');
                 fetch('/api/control/' + action, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
@@ -830,58 +802,19 @@
                 .then(response => response.json())
                 .then(data => {
                     console.log('Action completed:', action, data);
-                    if (data.status === 'success') {
-                        extensionManager.callFunction('showNotification', data.message, 'success');
-                    } else {
-                        extensionManager.callFunction('showNotification', data.message || 'Action failed', 'danger');
-                    }
+                    alert(data.message || (data.status === 'success' ? 'Success!' : 'Failed'));
                 })
                 .catch(error => {
                     console.error('Network error:', error);
-                    extensionManager.callFunction('showNotification', 'Network error occurred', 'danger');
+                    alert('Network error occurred');
                 });
             }
         };
-        console.log('✅ controlBot function defined and available');
 
-        window.refreshDashboard = function() {
-            console.log('refreshDashboard called');
-            fetch('/api/status')
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Dashboard refreshed:', data);
-                })
-                .catch(error => {
-                    console.error('Failed to refresh dashboard:', error);
-                });
-        };
-
-        // Global function definitions - moved before DOMContentLoaded for proper hoisting
-
-
-        // Enhanced dashboard initialization with extension resistance
+        // Minimal DOMContentLoaded handler
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Enhanced dashboard loading initiated...');
-
-            // Initialize extension management
-            extensionManager.detectExtensions();
-
-            // Register function guards
-            extensionManager.addFunctionGuard('updateTradingStatus', updateTradingStatus);
-            extensionManager.addFunctionGuard('updateTradingMode', updateTradingMode);
-            extensionManager.addFunctionGuard('showNotification', showNotification);
-
-            console.log('Page loaded successfully');
-            console.log('Available functions:', {
-                testFunctions: typeof window.testFunctions,
-                changeCurrency: typeof window.changeCurrency,
-                controlBot: typeof window.controlBot,
-                refreshDashboard: typeof window.refreshDashboard,
-                updateTradingStatus: typeof updateTradingStatus,
-                updateTradingMode: typeof updateTradingMode,
-                showNotification: typeof showNotification,
-                extensionManager: typeof extensionManager
-            });
+            console.log('Dashboard loaded - controlBot available:', typeof window.controlBot);
+        });
 
             // Enhanced error handling for status loading
             const loadTradingStatus = async () => {
@@ -1019,6 +952,7 @@
                 }
             }, 3000);
         };
+        console.log('✅ JavaScript loading completed - controlBot available:', typeof window.controlBot);
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
