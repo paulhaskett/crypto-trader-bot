@@ -166,10 +166,14 @@ async def dashboard(request: Request):
         asset_summary = [(item['currency'], f"${item.get('value_usd', 0):.2f}") for item in portfolio[:5]]
         logger.info(f"Portfolio Debug - Individual Assets: {asset_summary}")
 
-        # Format current prices in display currency
+        # Format current prices appropriately
         formatted_current_prices = {}
         for product_id, price in current_prices.items():
-            formatted_current_prices[product_id] = currency_converter.format_currency(price, display_currency)
+            base, quote = product_id.split('-')
+            if quote in ['USD', 'GBP', 'EUR']:
+                formatted_current_prices[product_id] = currency_converter.format_currency(price, quote)
+            else:
+                formatted_current_prices[product_id] = f"{price:.6f} {product_id}"
 
         # Get other status data (use same total_value_usd as individual breakdown)
         portfolio_data = {
@@ -225,6 +229,46 @@ async def dashboard(request: Request):
         # Get performance metrics
         perf_summary = db_manager.get_performance_summary(days=30)
 
+        # Build market conditions for AI signals
+        market_conditions = {}
+        for product_id in settings.PRODUCT_IDS[:5]:  # Only first 5 for dashboard performance
+            try:
+                signal = ai_model.get_signal(product_id)
+                price = current_prices.get(product_id, 0)
+                base, quote = product_id.split('-')
+                if quote in ['USD', 'GBP', 'EUR']:
+                    formatted_price = currency_converter.format_currency(price, quote)
+                else:
+                    formatted_price = f"{price:.6f} {product_id}"
+                market_conditions[product_id] = {
+                    'product_id': product_id,
+                    'signal': signal.get('action', 'HOLD'),
+                    'confidence': signal.get('confidence', 0),
+                    'reason': signal.get('reason', 'No signal available'),
+                    'price': price,
+                    'formatted_price': formatted_price,
+                    'meets_threshold': signal.get('confidence', 0) >= settings.MODEL_CONFIDENCE_THRESHOLD,
+                    'action': 'TRADE' if signal.get('confidence', 0) >= settings.MODEL_CONFIDENCE_THRESHOLD else 'WAIT'
+                }
+            except Exception as e:
+                logger.error(f"Error getting signal for {product_id}: {e}")
+                price = current_prices.get(product_id, 0)
+                base, quote = product_id.split('-')
+                if quote in ['USD', 'GBP', 'EUR']:
+                    formatted_price = currency_converter.format_currency(price, quote)
+                else:
+                    formatted_price = f"{price:.6f} {product_id}"
+                market_conditions[product_id] = {
+                    'product_id': product_id,
+                    'signal': 'ERROR',
+                    'confidence': 0,
+                    'reason': str(e),
+                    'price': price,
+                    'formatted_price': formatted_price,
+                    'meets_threshold': False,
+                    'action': 'ERROR'
+                }
+
         # Format portfolio data with currency conversion
 
         # Format portfolio data with currency conversion
@@ -265,6 +309,7 @@ async def dashboard(request: Request):
             "perf_summary": perf_summary,
             "trading_active": db_manager.get_trading_active(),
             "product_ids": settings.PRODUCT_IDS,
+            "market_conditions": market_conditions,
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 

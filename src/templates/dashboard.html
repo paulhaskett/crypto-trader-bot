@@ -486,11 +486,9 @@
                                 {{ pair }}
                             </div>
                             <div class="card-body">
-                                {% if current_prices[pair] %}
-                                    ${{ "{:.2f}".format(current_prices[pair]) }}
-                                {% else %}
-                                    <span class="text-muted">Loading...</span>
-                                {% endif %}
+
+                                    {{ formatted_current_prices[pair] }}
+
                             </div>
                         </div>
                     </div>
