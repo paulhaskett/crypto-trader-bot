@@ -498,19 +498,19 @@
                     <div class="card-body">
                         <div class="d-grid gap-2">
                             <div style="display: inline-block;">
-                                <button class="btn btn-success" onclick="if(window.controlBot) controlBot('start_trading'); else alert('Dashboard still loading...')">
+                                <button class="btn btn-success" onclick="controlBot('start_trading')">
                                     <i class="fas fa-play"></i> Start Trading
                                 </button>
                             </div>
                             <div style="display: none;">
-                                <button class="btn btn-warning" onclick="if(window.controlBot) controlBot('stop_trading'); else alert('Dashboard still loading...')">
+                                <button class="btn btn-warning" onclick="controlBot('stop_trading')">
                                     <i class="fas fa-pause"></i> Stop Trading
                                 </button>
                             </div>
-                            <button class="btn btn-danger" onclick="if(window.controlBot) controlBot('emergency_stop'); else alert('Dashboard still loading...')">
+                            <button class="btn btn-danger" onclick="controlBot('emergency_stop')">
                                 <i class="fas fa-exclamation-triangle"></i> Emergency Stop
                             </button>
-                            <button class="btn btn-info" onclick="if(window.controlBot) controlBot('retrain_models'); else alert('Dashboard still loading...')">
+                            <button class="btn btn-info" onclick="controlBot('retrain_models')">
                                 <i class="fas fa-brain"></i> Retrain AI Models
                             </button>
                             <button class="btn btn-secondary" onclick="testFunctions()">
@@ -586,196 +586,7 @@
 
     <!-- Custom JavaScript (loaded in head for immediate availability) -->
     <script>
-        // Dashboard JavaScript - Version: 2026-01-21 01:00 - ENHANCED EXTENSION RESISTANCE
-        console.log('🚀 Enhanced Dashboard JavaScript v2026-01-21-01:00 loaded with extension resistance');
-
-        // Extension Management System - Enterprise Grade
-        class ExtensionManager {
-            constructor() {
-                this.detectedExtensions = [];
-                this.functionGuards = {};
-                this.loadingQueue = [];
-                this.initialized = false;
-            }
-
-            // Detect browser extensions trying to interfere
-            detectExtensions() {
-                const extensionPatterns = [
-                    'installHook', 'overrideMethod', 'chrome-extension',
-                    'moz-extension', 'safari-extension'
-                ];
-
-                // Monitor for extension calls
-                const originalConsole = console;
-                console.error = (...args) => {
-                    const message = args.join(' ');
-                    if (extensionPatterns.some(pattern => message.includes(pattern))) {
-                        // Extension interference detected - suppress
-                        console.log('🔧 Extension interference detected - suppressed');
-                        return;
-                    }
-                    // Pass through non-extension errors
-                    originalConsole.error(...args);
-                };
-
-                this.initialized = true;
-                return true;
-            }
-
-            // Progressive function loading with guards
-            addFunctionGuard(functionName, implementation) {
-                this.functionGuards[functionName] = {
-                    available: false,
-                    implementation: implementation,
-                    calls: []
-                };
-            }
-
-            // Safe function execution
-            callFunction(functionName, ...args) {
-                if (this.functionGuards[functionName] && this.functionGuards[functionName].available) {
-                    return this.functionGuards[functionName].implementation(...args);
-                } else {
-                    // Queue for later execution
-                    if (this.functionGuards[functionName]) {
-                        this.functionGuards[functionName].calls.push(args);
-                    }
-                    return null;
-                }
-            }
-
-            // Mark function as available
-            markFunctionAvailable(functionName) {
-                if (this.functionGuards[functionName]) {
-                    this.functionGuards[functionName].available = true;
-
-                    // Execute queued calls
-                    while (this.functionGuards[functionName].calls.length > 0) {
-                        const args = this.functionGuards[functionName].calls.shift();
-                        this.callFunction(functionName, ...args);
-                    }
-                }
-            }
-        }
-
-        // Global instance
-        const extensionManager = new ExtensionManager();
-
-        // Enterprise-grade error handling
-        class ErrorHandler {
-            constructor() {
-                this.errors = [];
-                this.maxErrors = 100;
-                this.errorPatterns = {
-                    extension: ['installHook', 'overrideMethod', 'chrome-extension', 'moz-extension'],
-                    network: ['fetch', 'network', 'timeout', 'connection'],
-                    system: ['ReferenceError', 'TypeError', 'SyntaxError']
-                };
-            }
-
-            classifyError(error) {
-                const message = error.message || error.toString();
-
-                for (const [category, patterns] of Object.entries(this.errorPatterns)) {
-                    if (patterns.some(pattern => message.includes(pattern))) {
-                        return category;
-                    }
-                }
-                return 'unknown';
-            }
-
-            handleError(error, context = '') {
-                const errorInfo = {
-                    timestamp: new Date().toISOString(),
-                    error: error.message || error.toString(),
-                    stack: error.stack,
-                    context: context,
-                    category: this.classifyError(error),
-                    userAgent: navigator.userAgent,
-                    url: window.location.href
-                };
-
-                this.errors.push(errorInfo);
-
-                // Keep only recent errors
-                if (this.errors.length > this.maxErrors) {
-                    this.errors.shift();
-                }
-
-                // Log based on error type
-                switch (errorInfo.category) {
-                    case 'extension':
-                        console.log('🔧 Extension interference detected - suppressed:', errorInfo.error);
-                        return true; // Suppress extension errors
-
-                    case 'network':
-                        console.warn('🌐 Network error detected:', errorInfo.error);
-                        return false; // Show network errors
-
-                    case 'system':
-                        console.error('🔧 System error detected:', errorInfo.error);
-                        return false; // Show system errors
-
-                    default:
-                        console.warn('❓ Unknown error detected:', errorInfo.error);
-                        return false; // Show unknown errors
-                }
-            }
-
-            // Enhanced console wrapper
-            enhanceConsole() {
-                const originalConsole = {
-                    error: console.error,
-                    warn: console.warn,
-                    log: console.log
-                };
-
-                console.error = (...args) => {
-                    const error = args.find(arg => arg instanceof Error);
-                    if (error) {
-                        if (!this.handleError(error, 'console.error')) {
-                            originalConsole.error(...args);
-                        }
-                    } else {
-                        originalConsole.error(...args);
-                    }
-                };
-
-                console.warn = (...args) => {
-                    originalConsole.warn(...args);
-                };
-
-                console.log = (...args) => {
-                    originalConsole.log(...args);
-                };
-            }
-        }
-
-        // Global error handler instance
-        const errorHandler = new ErrorHandler();
-        errorHandler.enhanceConsole();
-
-        // Global error handler
-        window.addEventListener('error', function(event) {
-            errorHandler.handleError(event.error, 'global');
-        });
-
-        window.addEventListener('unhandledrejection', function(event) {
-            errorHandler.handleError(event.reason, 'promise');
-        });
-
-        // Enhanced trading status functions with extension resistance
-
-        function updateTradingMode(isPaperTrading) {
-            // Update navbar trading mode badge (not the activity badge)
-            const navbarBadge = document.querySelector('.navbar-text .trading-mode-badge');
-            if (navbarBadge) {
-                navbarBadge.className = 'badge bg-' + (isPaperTrading ? 'success' : 'danger') + ' trading-mode-badge';
-                navbarBadge.textContent = isPaperTrading ? 'PAPER TRADING' : 'LIVE TRADING';
-            }
-        }
-
-        // Simplified function definitions - no extension manager complexity
+        // Simple dashboard JavaScript - essential functions only
         window.controlBot = function(action) {
             console.log('Control bot called with action:', action);
 
@@ -811,55 +622,8 @@
             }
         };
 
-        // Minimal DOMContentLoaded handler
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('Dashboard loaded - controlBot available:', typeof window.controlBot);
-        });
-
-            // Enhanced error handling for status loading
-            const loadTradingStatus = async () => {
-                try {
-                    console.log('📊 Fetching initial status...');
-                    const response = await fetch('/api/status');
-                    const data = await response.json();
-
-                    console.log('📊 Initial status loaded:', data);
-
-                    // Update trading status with extension-resistant call
-                    if (data.trading && data.trading.active !== undefined) {
-                        extensionManager.callFunction('updateTradingStatus', data.trading.active);
-                    }
-
-                    // Update trading mode
-                    if (data.trading && data.trading.mode !== undefined) {
-                        extensionManager.callFunction('updateTradingMode', data.trading.mode === 'paper');
-                    }
-
-                    console.log('✅ Enhanced dashboard loading completed successfully');
-
-                } catch (error) {
-                    console.error('❌ Failed to get initial status:', error);
-
-                    // Extension-resistant fallback
-                    if (error.message && error.message.includes('installHook')) {
-                        console.log('🔧 Extension interference detected - loading fallback mode');
-                        extensionManager.callFunction('updateTradingStatus', false);
-                    } else {
-                        // Show user-friendly error
-                        extensionManager.callFunction('showNotification', 'Failed to load trading status. Please refresh the page.', 'warning');
-                    }
-                }
-            };
-
-            // Mark functions as available after DOM load
-            extensionManager.markFunctionAvailable('updateTradingStatus');
-            extensionManager.markFunctionAvailable('updateTradingMode');
-            extensionManager.markFunctionAvailable('showNotification');
-
-            // Start loading with extension protection
-            loadTradingStatus();
-
-            console.log('🚀 Extension-resistant dashboard system activated');
+        console.log('Dashboard loaded - controlBot available:', typeof window.controlBot);
+    </script>
         });
 
         // Exchange rate update function
