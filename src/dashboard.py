@@ -96,7 +96,9 @@ async def dashboard(request: Request):
                 if balance <= 0:
                     continue
 
-                currencies_needing_prices.add(currency)
+                # Only add currencies that need price lookups (not USD or USDC)
+                if currency not in ['USD', 'USDC']:
+                    currencies_needing_prices.add(currency)
 
             # Fetch prices for all currencies found in wallet
             for currency in currencies_needing_prices:
@@ -261,6 +263,7 @@ async def dashboard(request: Request):
             "total_trades": total_trades,
             "win_rate": win_rate,
             "perf_summary": perf_summary,
+            "trading_active": db_manager.get_trading_active(),
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -397,8 +400,12 @@ async def models_page(request: Request):
 async def settings_page(request: Request):
     """Settings and configuration page."""
     try:
+        # Get user's preferred display currency
+        display_currency = db_manager.get_user_setting('display_currency', 'USD') or 'USD'
+
         context = {
             "request": request,
+            "display_currency": display_currency,
             "settings": {
                 "max_position_size": settings.MAX_POSITION_SIZE,
                 "max_daily_trades": settings.MAX_DAILY_TRADES,
@@ -460,7 +467,9 @@ async def get_portfolio():
                 if balance <= 0:
                     continue
 
-                currencies_needing_prices.add(currency)
+                # Only add currencies that need price lookups (not USD or USDC)
+                if currency not in ['USD', 'USDC']:
+                    currencies_needing_prices.add(currency)
 
             # Fetch prices for all currencies found in wallet
             for currency in currencies_needing_prices:
@@ -580,7 +589,9 @@ async def portfolio_debug():
             currency = account['currency']
             balance = account['available']
             if balance > 0:
-                currencies_needing_prices.add(currency)
+                # Only add currencies that need price lookups (not USD or USDC)
+                if currency not in ['USD', 'USDC']:
+                    currencies_needing_prices.add(currency)
 
         # Fetch prices for all currencies
         for currency in currencies_needing_prices:
@@ -604,6 +615,10 @@ async def portfolio_debug():
 
             if currency == 'USD':
                 value_usd = balance
+                price = 1.0
+            elif currency == 'USDC':
+                # USDC is a stablecoin pegged to $1 USD
+                value_usd = balance * 1.0
                 price = 1.0
             elif f"{currency}-USD" in current_prices:
                 price = current_prices[f"{currency}-USD"]
@@ -805,7 +820,86 @@ async def get_status():
         }
 
 
-def run_dashboard(host: str = "0.0.0.0", port: int = settings.DASHBOARD_PORT):
+@app.post("/api/settings/display_currency")
+async def set_display_currency(request: Request):
+    """Set user's preferred display currency."""
+    try:
+        data = await request.json()
+        currency = data.get('value', 'USD').upper()
+
+        # Validate currency
+        if currency not in ['USD', 'GBP']:
+            return {"status": "error", "message": "Invalid currency. Must be USD or GBP"}
+
+        # Save user setting
+        success = db_manager.save_user_setting('display_currency', currency)
+        if success:
+            return {"status": "success", "message": f"Display currency set to {currency}"}
+        else:
+            return {"status": "error", "message": "Failed to save currency preference"}
+
+    except Exception as e:
+        logger.error(f"Display currency error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/trades/clear")
+async def clear_trades():
+    """Clear all trade records from database."""
+    try:
+        trades_cleared = db_manager.clear_all_trades()
+        return {
+            "success": True,
+            "message": f"Cleared {trades_cleared} trades from database"
+        }
+    except Exception as e:
+        logger.error(f"Clear trades error: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to clear trades: {str(e)}"
+        }
+
+
+@app.post("/api/test-trade")
+async def test_trade():
+    """Place a very small test trade to verify API keys work."""
+    try:
+        # Only allow in paper trading mode for safety
+        if not trading_engine.paper_trading:
+            return {
+                "success": False,
+                "error": "Test trades only allowed in paper trading mode"
+            }
+
+        # Place a very small test buy order (0.00001 BTC) using USDC
+        test_result = coinbase_api.place_market_order(
+            product_id="BTC-USDC",
+            side="buy",
+            size=0.00001
+        )
+
+        if test_result:
+            return {
+                "success": True,
+                "message": "Test trade successful - API keys are working",
+                "order_id": test_result.get('order_id', 'unknown'),
+                "product_id": test_result.get('product_id', 'unknown')
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Test trade failed - check API keys and connection"
+            }
+
+    except Exception as e:
+        logger.error(f"Test trade error: {e}")
+        return {
+            "success": False,
+            "error": f"Test trade failed: {str(e)}"
+        }
+
+
+def run_dashboard(host: str = "0.0.0.0", port: int = 8001):
     """Run the dashboard server."""
     logger.info(f"Starting dashboard on http://{host}:{port}")
     uvicorn.run(
