@@ -122,6 +122,10 @@ async def dashboard(request: Request):
                 if currency == 'USD':
                     value_usd = balance
                     price = 1.0
+                elif currency == 'USDC':
+                    # USDC is a stablecoin pegged to $1 USD
+                    value_usd = balance * 1.0
+                    price = 1.0
                 elif f"{currency}-USD" in current_prices:
                     price = current_prices[f"{currency}-USD"]
                     value_usd = balance * price
@@ -229,7 +233,9 @@ async def dashboard(request: Request):
             item_value = item.get('value_usd', item.get('value', 0))
             converted_item['value'] = currency_converter.convert_amount(item_value, 'USD', display_currency)
             converted_item['formatted_value'] = currency_converter.format_currency(converted_item['value'], display_currency)
-            converted_item['formatted_balance'] = f"{converted_item['value']:.2f} {display_currency}"
+            # Balance should show actual amount, not converted value
+            balance = item.get('balance', 0)
+            converted_item['formatted_balance'] = f"{balance:.6f} {item['currency']}"
             converted_portfolio.append(converted_item)
 
         # Format other currency values
@@ -308,9 +314,9 @@ async def performance_page(request: Request):
 
         # Get trading statistics
         all_trades = db_manager.get_trades(limit=1000)
+        product_stats = {}
         if all_trades:
             # Group by product
-            product_stats = {}
             for trade in all_trades:
                 product = trade.get('product_id', 'Unknown')
                 if product not in product_stats:
@@ -336,7 +342,7 @@ async def performance_page(request: Request):
         context = {
             "request": request,
             "performance_data": performance_data,
-            "product_stats": product_stats if 'product_stats' in locals() else {},
+            "product_stats": product_stats,
             "total_trades": len(all_trades) if all_trades else 0
         }
 
@@ -712,21 +718,31 @@ async def get_status():
                 currency = account['currency']
                 balance = account['available']
                 if balance > 0:
-                    account_summary.append({
-                        "currency": currency,
-                        "balance": balance
-                    })
+                    value_usd = 0.0
                     if currency == 'USD':
+                        value_usd = balance
                         total_balance += balance
+                    elif currency == 'USDC':
+                        # USDC is a stablecoin pegged to $1 USD
+                        value_usd = balance * 1.0
+                        total_balance += value_usd
                     else:
                         # Try to get current price for conversion
                         try:
                             product_id = f"{currency}-USD"
                             ticker = coinbase_api.get_product_ticker(product_id)
-                            price = ticker.get('price', 0)
-                            total_balance += balance * price
+                            price = float(ticker.get('price', 0))
+                            value_usd = balance * price
+                            total_balance += value_usd
                         except:
-                            pass
+                            # If price lookup fails, treat as zero value
+                            value_usd = 0.0
+
+                    account_summary.append({
+                        "currency": currency,
+                        "balance": balance,
+                        "value_usd": value_usd
+                    })
 
         # Get model status
         model_status = ai_model.get_model_status()

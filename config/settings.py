@@ -26,9 +26,10 @@ class Settings:
     COINBASE_ADVANCED_API_SECRET: str = os.getenv('TRADING_COINBASE_API_KEY_SECRET', COINBASE_API_SECRET)
 
     # Trading Configuration
-    BASE_CURRENCY: str = 'USD'  # Base currency for trading
+    BASE_CURRENCY: str = 'USD'  # Primary base currency for trading
+    BASE_CURRENCIES: list = ['USD', 'USDC']  # Support both fiat and stablecoin
     QUOTE_CURRENCIES: list = ['BTC', 'ETH', 'SOL', 'XRP', 'LTC']  # Added XRP and LTC with trained models
-    PRODUCT_IDS: list = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'LTC-USD']  # All 5 trading pairs
+    PRODUCT_IDS: list = ['BTC-USDC', 'ETH-USDC', 'SOL-USDC', 'XRP-USDC', 'LTC-USDC']  # All 5 trading pairs
     FOCUS_CURRENCIES: list = ['BTC', 'ETH', 'SOL', 'XRP', 'LTC']  # Complete multi-currency focus
     DIVERSIFY_AFTER_VALUE: float = 50.0  # Add more cryptos after portfolio reaches $50
 

@@ -498,19 +498,19 @@
                     <div class="card-body">
                         <div class="d-grid gap-2">
                             <div style="display: inline-block;">
-                                <button class="btn btn-success" onclick="if(window.controlBot) controlBot('start_trading'); else alert('Dashboard still loading...')">
+                                <button class="btn btn-success" onclick="controlBot('start_trading')">
                                     <i class="fas fa-play"></i> Start Trading
                                 </button>
                             </div>
                             <div style="display: none;">
-                                <button class="btn btn-warning" onclick="if(window.controlBot) controlBot('stop_trading'); else alert('Dashboard still loading...')">
+                                <button class="btn btn-warning" onclick="controlBot('stop_trading')">
                                     <i class="fas fa-pause"></i> Stop Trading
                                 </button>
                             </div>
-                            <button class="btn btn-danger" onclick="if(window.controlBot) controlBot('emergency_stop'); else alert('Dashboard still loading...')">
+                            <button class="btn btn-danger" onclick="controlBot('emergency_stop')">
                                 <i class="fas fa-exclamation-triangle"></i> Emergency Stop
                             </button>
-                            <button class="btn btn-info" onclick="if(window.controlBot) controlBot('retrain_models'); else alert('Dashboard still loading...')">
+                            <button class="btn btn-info" onclick="controlBot('retrain_models')">
                                 <i class="fas fa-brain"></i> Retrain AI Models
                             </button>
                             <button class="btn btn-secondary" onclick="testFunctions()">
@@ -765,6 +765,46 @@
         });
 
         // Enhanced trading status functions with extension resistance
+        function updateTradingStatus(isActive) {
+            console.log(`✅ Trading status update initiated: ${isActive ? 'ACTIVE' : 'STOPPED'}`);
+
+            // Update trading status banner
+            const banner = document.getElementById('tradingStatusBanner');
+            if (banner) {
+                if (isActive) {
+                    banner.className = 'alert alert-success alert-dismissible fade show position-fixed';
+                    banner.style.display = 'block';
+                    document.getElementById('tradingStatusMessage').textContent = 'Bot is actively monitoring markets';
+                } else {
+                    banner.style.display = 'none';
+                }
+            }
+
+            // Update button states - show/hide based on status
+            const startBtn = document.querySelector('button[onclick*="start_trading"]');
+            const stopBtn = document.querySelector('button[onclick*="stop_trading"]');
+
+            if (startBtn) {
+                startBtn.parentElement.style.display = isActive ? 'none' : 'inline-block';
+            }
+            if (stopBtn) {
+                stopBtn.parentElement.style.display = isActive ? 'inline-block' : 'none';
+            }
+
+            // Update trading activity badge in navbar
+            const activityBadge = document.getElementById('tradingActivityBadge');
+            if (activityBadge) {
+                if (isActive) {
+                    activityBadge.className = 'badge bg-success me-2';
+                    activityBadge.innerHTML = '<i class="fas fa-play-circle"></i> TRADING';
+                } else {
+                    activityBadge.className = 'badge bg-secondary me-2';
+                    activityBadge.innerHTML = '<i class="fas fa-pause-circle"></i> STOPPED';
+                }
+            }
+
+            console.log(`✅ Trading status updated successfully: ${isActive ? 'ACTIVE' : 'STOPPED'}`);
+        }
 
         function updateTradingMode(isPaperTrading) {
             // Update navbar trading mode badge (not the activity badge)
@@ -773,6 +813,25 @@
                 navbarBadge.className = `badge bg-${isPaperTrading ? 'success' : 'danger'} trading-mode-badge`;
                 navbarBadge.textContent = isPaperTrading ? 'PAPER TRADING' : 'LIVE TRADING';
             }
+        }
+
+        function showNotification(message, type) {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type} alert-dismissible fade show position-fixed mt-3`;
+            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            notification.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            document.body.appendChild(notification);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 3000);
         }
 
         // Global function definitions - enhanced with extension resistance
@@ -803,15 +862,8 @@
             });
         };
 
-        window.controlBot = async function(action) {
-            console.log('🎮 controlBot called with action:', action);
-
-            // Prevent multiple rapid clicks
-            if (window.controlBot.processing) {
-                console.log('⚠️ Already processing, ignoring duplicate click');
-                return;
-            }
-
+        window.controlBot = function(action) {
+            console.log('controlBot called with action:', action);
             let confirmMessage = '';
             switch(action) {
                 case 'start_trading':
@@ -828,20 +880,14 @@
             }
 
             if (confirm(confirmMessage)) {
-                window.controlBot.processing = true;
-
-                try {
-                    console.log('🚀 Sending control request...');
-                    const response = await fetch(`/api/control/${action}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        signal: AbortSignal.timeout(10000) // 10 second timeout
-                    });
-
-                    const data = await response.json();
-
+                fetch(`/api/control/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                .then(response => response.json())
+                .then(data => {
                     if (data.status === 'success') {
-                        console.log('✅ Action completed:', action);
+                        console.log('Action completed:', action);
 
                         // Update trading state if returned
                         if (data.trading_active !== undefined) {
@@ -857,23 +903,16 @@
                         extensionManager.callFunction('showNotification', data.message, 'success');
 
                     } else {
-                        console.error('❌ Action failed:', data.message);
+                        console.error('Action failed:', data.message);
                         extensionManager.callFunction('showNotification', data.message, 'danger');
                     }
-
-                } catch (error) {
-                    console.error('❌ Network error:', error);
-                    if (error.name === 'TimeoutError') {
-                        extensionManager.callFunction('showNotification', 'Request timed out. Please try again.', 'warning');
-                    } else {
-                        extensionManager.callFunction('showNotification', 'Network error occurred', 'danger');
-                    }
-                } finally {
-                    window.controlBot.processing = false;
-                }
+                })
+                .catch(error => {
+                    console.error('Network error:', error);
+                    extensionManager.callFunction('showNotification', 'Network error occurred', 'danger');
+                });
             }
         };
-        console.log('✅ controlBot function defined and available');
 
         window.refreshDashboard = function() {
             console.log('refreshDashboard called');
@@ -886,9 +925,6 @@
                     console.error('Failed to refresh dashboard:', error);
                 });
         };
-
-        // Global function definitions - moved before DOMContentLoaded for proper hoisting
-
 
         // Enhanced dashboard initialization with extension resistance
         document.addEventListener('DOMContentLoaded', function() {
@@ -957,6 +993,10 @@
             // Start loading with extension protection
             loadTradingStatus();
 
+            // Initialize portfolio updates
+            updatePortfolioValues();
+            setInterval(updatePortfolioValues, 30 * 1000); // Update every 30 seconds
+
             console.log('🚀 Extension-resistant dashboard system activated');
         });
 
@@ -993,7 +1033,188 @@
         setInterval(updateExchangeRate, 2 * 60 * 1000);
 
         // Update portfolio values immediately on page load and every 30 seconds
+        function updatePortfolioValues() {
+            console.log('🔄 [DEBUG] Starting portfolio value update...');
+            fetch('/api/status')
+                .then(response => {
+                    console.log('📡 [DEBUG] API response received:', response.status, response.statusText);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('📊 [DEBUG] API data received:', {
+                        hasAccount: !!data.account,
+                        totalBalance: data.account?.total_balance_usd,
+                        currenciesCount: data.account?.currencies?.length,
+                        currencies: data.account?.currencies
+                    });
 
+                    // Update total portfolio value
+                    console.log('💰 [DEBUG] Updating total portfolio value...');
+                    if (data.account && data.account.total_balance_usd !== undefined) {
+                        console.log('💰 [DEBUG] Total balance from API:', data.account.total_balance_usd);
+
+                        // More specific selector for portfolio value
+                        const portfolioCard = document.querySelector('.card .fas.fa-wallet');
+                        console.log('🎯 [DEBUG] Portfolio card selector result:', portfolioCard);
+
+                        if (portfolioCard) {
+                            const cardBody = portfolioCard.closest('.card-body');
+                            console.log('🎯 [DEBUG] Card body found:', !!cardBody);
+
+                            if (cardBody) {
+                                const valueElement = cardBody.querySelector('.card-text');
+                                console.log('🎯 [DEBUG] Value element found:', !!valueElement);
+
+                                if (valueElement) {
+                                    const newValue = data.account.total_balance_usd.toFixed(2);
+                                    const oldValue = valueElement.textContent;
+                                    valueElement.textContent = `$${newValue}`;
+                                    console.log(`✅ [SUCCESS] Total portfolio updated: ${oldValue} → $${newValue}`);
+                                } else {
+                                    console.error('❌ [ERROR] Could not find .card-text element in portfolio card');
+                                }
+                            } else {
+                                console.error('❌ [ERROR] Could not find .card-body for portfolio card');
+                            }
+                        } else {
+                            console.warn('⚠️ [WARN] Primary selector failed, trying fallback...');
+
+                            // Fallback: Find by title text
+                            const cards = document.querySelectorAll('.card');
+                            console.log('🎯 [DEBUG] Fallback: Found', cards.length, 'card elements');
+
+                            let found = false;
+                            for (const card of cards) {
+                                const title = card.querySelector('.card-title');
+                                console.log('🎯 [DEBUG] Checking card with title:', title?.textContent);
+
+                                if (title && title.textContent.includes('Portfolio Value')) {
+                                    const valueElement = card.querySelector('.card-text');
+                                    if (valueElement) {
+                                        const newValue = data.account.total_balance_usd.toFixed(2);
+                                        const oldValue = valueElement.textContent;
+                                        valueElement.textContent = `$${newValue}`;
+                                        console.log(`✅ [SUCCESS] Total portfolio updated (fallback): ${oldValue} → $${newValue}`);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (!found) {
+                                console.error('❌ [ERROR] Could not find portfolio value element with any method');
+                            }
+                        }
+                    } else {
+                        console.error('❌ [ERROR] No account data or total_balance_usd in API response');
+                    }
+
+                    // Update individual currency values in portfolio breakdown
+                    console.log('🪙 [DEBUG] Updating individual currency values...');
+                    if (data.account && data.account.currencies && Array.isArray(data.account.currencies)) {
+                        console.log('🪙 [DEBUG] Processing', data.account.currencies.length, 'currencies:', data.account.currencies.map(c => c.currency));
+
+                        // Find the portfolio breakdown section
+                        const portfolioBreakdown = document.querySelector('.card .card-header h5');
+                        console.log('🎯 [DEBUG] Portfolio breakdown header found:', !!portfolioBreakdown);
+
+                        if (portfolioBreakdown) {
+                            console.log('🎯 [DEBUG] Header text:', portfolioBreakdown.textContent);
+
+                            if (portfolioBreakdown.textContent.includes('Portfolio Breakdown')) {
+                                const breakdownCard = portfolioBreakdown.closest('.card');
+                                console.log('🎯 [DEBUG] Breakdown card found:', !!breakdownCard);
+
+                                if (breakdownCard) {
+                                    const currencyCards = breakdownCard.querySelectorAll('.row .col-md-4 .card');
+                                    console.log('🎯 [DEBUG] Found', currencyCards.length, 'currency cards in breakdown using selector: .row .col-md-4 .card');
+                                    console.log('🎯 [DEBUG] Currency cards found:', currencyCards);
+
+                                    let processedCount = 0;
+                                    for (const currencyCard of currencyCards) {
+                                        console.log('🎯 [DEBUG] Processing currency card', processedCount + 1);
+
+                                        const currencyTitle = currencyCard.querySelector('h6.card-title');
+                                        console.log('🎯 [DEBUG] Currency title element found:', !!currencyTitle);
+
+                                        if (currencyTitle) {
+                                            const currencyName = currencyTitle.textContent.trim();
+                                            console.log('🎯 [DEBUG] Currency name from DOM:', currencyName);
+
+                                            const currencyData = data.account.currencies.find(c => c.currency === currencyName);
+                                            console.log('🎯 [DEBUG] Matching currency data found:', !!currencyData);
+
+                                            if (currencyData) {
+                                                console.log('🪙 [DEBUG] Processing', currencyName, '- Balance:', currencyData.balance, 'Value USD:', currencyData.value_usd);
+
+                                                // Update balance display
+                                                const balanceElement = currencyCard.querySelector('div.mb-2 div');
+                                                console.log('🎯 [DEBUG] Balance element found:', !!balanceElement);
+
+                                                if (balanceElement) {
+                                                    const oldBalance = balanceElement.textContent;
+                                                    balanceElement.textContent = `${currencyData.balance.toFixed(6)} ${currencyName}`;
+                                                    console.log(`✅ [SUCCESS] ${currencyName} balance updated: ${oldBalance} → ${balanceElement.textContent}`);
+                                                } else {
+                                                    console.error(`❌ [ERROR] Could not find balance element for ${currencyName}`);
+                                                }
+
+                                                // Update value display
+                                                const valueElements = currencyCard.querySelectorAll('div');
+                                                console.log('🎯 [DEBUG] Found', valueElements.length, 'div elements in currency card');
+
+                                                let valueUpdated = false;
+                                                for (const valueEl of valueElements) {
+                                                    console.log('🎯 [DEBUG] Checking div with text:', valueEl.textContent?.substring(0, 20));
+
+                                                    if (valueEl.textContent && valueEl.textContent.includes('Value')) {
+                                                        const valueDisplay = valueEl.nextElementSibling;
+                                                        console.log('🎯 [DEBUG] Value display element found:', !!valueDisplay);
+
+                                                        if (valueDisplay && currencyData.value_usd !== undefined) {
+                                                            const oldValue = valueDisplay.textContent;
+                                                            const valueUSD = currencyData.value_usd;
+                                                            valueDisplay.textContent = `$${valueUSD.toFixed(2)}`;
+                                                            console.log(`✅ [SUCCESS] ${currencyName} value updated: ${oldValue} → $${valueUSD.toFixed(2)}`);
+                                                            valueUpdated = true;
+                                                        } else {
+                                                            console.error(`❌ [ERROR] Value display element missing or no value_usd for ${currencyName}`);
+                                                        }
+                                                        break; // Found the value element, no need to check others
+                                                    }
+                                                }
+
+                                                if (!valueUpdated) {
+                                                    console.error(`❌ [ERROR] Could not find and update value element for ${currencyName}`);
+                                                }
+
+                                                processedCount++;
+                                            } else {
+                                                console.warn(`⚠️ [WARN] No API data found for currency: ${currencyName}`);
+                                            }
+                                        } else {
+                                            console.error('❌ [ERROR] Could not find h6.card-title in currency card');
+                                        }
+                                    }
+
+                                    console.log(`📊 [SUMMARY] Processed ${processedCount} currency cards`);
+                                } else {
+                                    console.error('❌ [ERROR] Could not find .card container for portfolio breakdown');
+                                }
+                            } else {
+                                console.error('❌ [ERROR] Header text does not contain "Portfolio Breakdown"');
+                            }
+                        } else {
+                            console.error('❌ [ERROR] Could not find portfolio breakdown header');
+                        }
+                    } else {
+                        console.warn('⚠️ [WARN] No currency data available for individual updates');
+                    }
+                })
+                .catch(error => {
+                    console.error('❌ Failed to update portfolio values:', error);
+                });
+        }
 
         window.updateTradingStatus = function(isActive) {
             // Update trading status banner

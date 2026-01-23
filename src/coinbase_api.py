@@ -25,12 +25,15 @@ try:
 except ImportError:
     SDK_AVAILABLE = False
     logging.warning("Coinbase Advanced SDK not available, falling back to REST implementation")
-    try:
-        import ecdsa
-        import jwt
-        ECDSA_AVAILABLE = True
-    except ImportError:
-        ECDSA_AVAILABLE = False
+
+# Initialize ECDSA availability (always try to import)
+try:
+    import ecdsa
+    import jwt
+    ECDSA_AVAILABLE = True
+except ImportError:
+    ECDSA_AVAILABLE = False
+    if not SDK_AVAILABLE:
         logging.warning("ecdsa and jwt libraries not available for Advanced Trade API")
 
 from config.settings import settings
@@ -275,7 +278,7 @@ class CoinbaseAPI:
                 for account in response['accounts']:
                     try:
                         # Advanced Trade API structure
-                        currency = account.get('currency', 'USD')
+                        currency = account.get('currency', 'USDC')
                         available_balance = account.get('available_balance', {})
                         balance_info = account.get('balance', {})
 
@@ -304,7 +307,7 @@ class CoinbaseAPI:
                 for account in response:
                     try:
                         # Coinbase Pro API structure
-                        currency = account.get('currency', 'USD')
+                        currency = account.get('currency', 'USDC')
                         available = float(account.get('available', 0))
                         balance = float(account.get('balance', 0))
 
@@ -342,7 +345,7 @@ class CoinbaseAPI:
         Get available balance for a specific currency.
         
         Args:
-            currency: The currency code (e.g., 'BTC', 'USD')
+            currency: The currency code (e.g., 'BTC', 'USDC')
             
         Returns:
             Available balance as float
@@ -358,7 +361,7 @@ class CoinbaseAPI:
         Get current market ticker information for a product.
 
         Args:
-            product_id: Trading pair (e.g., 'BTC-USD')
+            product_id: Trading pair (e.g., 'BTC-USDC')
 
         Returns:
             Dictionary with price, volume, and other market data
@@ -678,6 +681,75 @@ class CoinbaseAPI:
             logger.error(f"Failed to get order {order_id}: {e}")
             return None
 
+    def convert_usdc_to_usd(self, usdc_amount: float) -> Optional[Dict[str, Any]]:
+        """
+        Convert USDC to USD using Coinbase conversion API.
+
+        Args:
+            usdc_amount: Amount of USDC to convert
+
+        Returns:
+            Conversion result or None if failed
+        """
+        try:
+            logger.info(f"Converting {usdc_amount} USDC to USD")
+
+            # Use SDK if available
+            if self.sdk_client:
+                # Get USDC account
+                accounts = self.sdk_client.get_accounts()
+                usdc_account = None
+                usd_account = None
+
+                # Handle different SDK response formats
+                if hasattr(accounts, 'data'):
+                    account_list = accounts.data
+                elif hasattr(accounts, 'accounts'):
+                    account_list = accounts.accounts
+                else:
+                    account_list = accounts
+
+                for account in account_list:
+                    if account.currency == 'USDC':
+                        usdc_account = account
+                    elif account.currency == 'USD':
+                        usd_account = account
+
+                if not usdc_account:
+                    return {'success': False, 'error': 'No USDC account found'}
+
+                if not usd_account:
+                    return {'success': False, 'error': 'No USD account found'}
+
+                # Create conversion quote
+                quote = self.sdk_client.create_convert_quote(
+                    from_account=usdc_account.id,
+                    to_account=usd_account.id,
+                    amount=str(usdc_amount)
+                )
+
+                if hasattr(quote, 'success') and quote.success:
+                    # Commit the conversion
+                    conversion = self.sdk_client.commit_convert_trade(
+                        trade_id=quote.trade.id
+                    )
+
+                    if hasattr(conversion, 'success') and conversion.success:
+                        logger.info(f"Successfully converted {usdc_amount} USDC to USD")
+                        return {
+                            'success': True,
+                            'converted_amount': usdc_amount,
+                            'trade_id': conversion.trade.id if hasattr(conversion, 'trade') else 'unknown'
+                        }
+                    else:
+                        return {'success': False, 'error': 'Failed to commit conversion'}
+                else:
+                    return {'success': False, 'error': 'Failed to create conversion quote'}
+
+        except Exception as e:
+            logger.error(f"USDC to USD conversion failed: {e}")
+            return {'success': False, 'error': str(e)}
+
     def place_market_order(self, product_id: str, side: str, size: float) -> Optional[Dict[str, Any]]:
         """
         Place a market order using Coinbase Advanced SDK or REST fallback.
@@ -735,7 +807,6 @@ class CoinbaseAPI:
             except Exception as e:
                 logger.error(f"SDK order failed: {e}")
                 # Fall back to REST implementation
-                logger.info("Falling back to REST implementation")
 
         # Fallback to REST implementation
         try:
