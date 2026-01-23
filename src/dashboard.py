@@ -872,11 +872,11 @@ async def test_trade():
                 "error": "Test trades only allowed in paper trading mode"
             }
 
-        # Place a very small test sell order (0.00001 BTC) for SOL
+        # Place a very small test sell order (0.001 ETH) for BTC
         test_result = coinbase_api.place_market_order(
-            product_id="BTC-SOL",
+            product_id="ETH-BTC",
             side="sell",
-            size=0.00001
+            size=0.001
         )
 
         if test_result:

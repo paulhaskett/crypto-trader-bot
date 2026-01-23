@@ -29,7 +29,7 @@ class Settings:
     BASE_CURRENCY: str = 'USD'  # Primary base currency for portfolio valuation
     BASE_CURRENCIES: list = ['USD', 'USDC']  # Support USD valuation for risk management
     QUOTE_CURRENCIES: list = ['BTC', 'ETH', 'SOL', 'XRP', 'LTC']  # Cryptos available for trading
-    PRODUCT_IDS: list = ['BTC-ETH', 'BTC-SOL', 'BTC-XRP', 'BTC-LTC', 'ETH-SOL', 'ETH-XRP', 'ETH-LTC', 'SOL-XRP', 'SOL-LTC', 'XRP-LTC']  # All 10 crypto-to-crypto pairs
+    PRODUCT_IDS: list = ['ETH-BTC', 'SOL-BTC', 'XRP-BTC', 'LTC-BTC', 'ADA-BTC', 'DOT-BTC', 'AVAX-BTC', 'MATIC-BTC']  # 8 BTC-quoted crypto pairs
     FOCUS_CURRENCIES: list = ['BTC', 'ETH', 'SOL', 'XRP', 'LTC']  # Complete multi-currency focus
     DIVERSIFY_AFTER_VALUE: float = 50.0  # Add more cryptos after portfolio reaches $50
 
