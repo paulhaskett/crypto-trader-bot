@@ -145,7 +145,7 @@ class TradingEngine:
             direction = 'long' if signal['prediction'] == 1 else 'short'
             stop_loss_price = risk_manager.calculate_stop_loss(entry_price, direction, volatility)
 
-            logger.debug(f"Signal validation: {product_id} | Entry: ${entry_price:.2f} | Volatility: {volatility:.4f} | Direction: {direction} | Stop Loss: ${stop_loss_price:.2f}")
+            logger.debug(f"Signal validation: {product_id} | Entry: {entry_price:.6f} | Volatility: {volatility:.4f} | Direction: {direction} | Stop Loss: {stop_loss_price:.6f}")
 
             # Calculate position size
             confidence = signal['confidence']
@@ -155,6 +155,25 @@ class TradingEngine:
 
             if position_sizing['size'] <= 0:
                 logger.info(f"Signal rejected: {position_sizing['reason']}")
+                return False
+
+            # Check account balance for required currency
+            base_currency, quote_currency = product_id.split('-')
+            side = 'buy' if signal['action'] == 'BUY' else 'sell'
+            if side == 'buy':
+                required_currency = quote_currency
+                required_amount = position_sizing['size'] * entry_price
+            else:
+                required_currency = base_currency
+                required_amount = position_sizing['size']
+
+            try:
+                balance = coinbase_api.get_account_balance(required_currency)
+                if balance < required_amount:
+                    logger.info(f"Insufficient balance for {product_id} {side}: need {required_amount:.6f} {required_currency}, have {balance:.6f}")
+                    return False
+            except Exception as e:
+                logger.error(f"Failed to check balance for {required_currency}: {e}")
                 return False
 
             # Store validated signal details

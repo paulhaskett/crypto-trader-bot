@@ -455,8 +455,8 @@ class CoinbaseAPI:
             
             response = self._make_request('GET', f'products/{product_id}/candles')
             
-            if response and 'candles' in response:
-                candles_data = response['candles']
+            if response and isinstance(response, list) and len(response) > 0:
+                candles_data = response
                 
                 # Convert to DataFrame
                 df = pd.DataFrame(candles_data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
@@ -640,7 +640,7 @@ class CoinbaseAPI:
             elif response and 'error' in response:
                 error_msg = response.get('message', 'Unknown error')
                 if 'account is not available' in error_msg:
-                    logger.warning("Advanced Trade API permissions not available, trying legacy API...")
+                    logger.warning("Advanced Trade API permissions not available (check API key has 'trade' permission), trying legacy API...")
                     # Fall back to legacy API
                     return self._place_legacy_order(product_id, side, size)
                 else:
@@ -719,7 +719,13 @@ class CoinbaseAPI:
                     return {'success': False, 'error': 'No USDC account found'}
 
                 if not usd_account:
-                    return {'success': False, 'error': 'No USD account found'}
+                    # If no USD account exists, USDC is already valued in USD terms (1:1)
+                    logger.info(f"No USD account found, treating {usdc_amount} USDC as already in USD")
+                    return {
+                        'success': True,
+                        'converted_amount': usdc_amount,
+                        'message': 'USDC treated as USD equivalent (no conversion needed)'
+                    }
 
                 # Create conversion quote
                 quote = self.sdk_client.create_convert_quote(
@@ -850,7 +856,7 @@ class CoinbaseAPI:
             elif response and 'error' in response:
                 error_msg = response.get('message', 'Unknown error')
                 if 'account is not available' in error_msg:
-                    logger.warning("Advanced Trade API permissions not available, trying legacy API...")
+                    logger.warning("Advanced Trade API permissions not available (check API key has 'trade' permission), trying legacy API...")
                     # Fall back to legacy API
                     return self._place_legacy_order(product_id, side, size)
                 else:

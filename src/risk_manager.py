@@ -142,11 +142,24 @@ class RiskManager:
             # Position Size = Risk / |Entry - Stop Loss|
             position_size_usd = risk_amount / price_risk
 
-            # For crypto, convert USD size to crypto amount
-            if 'USD' in product_id:
+            # Convert USD size to crypto amount
+            base_currency, quote_currency = product_id.split('-')
+            if quote_currency == 'USD':
+                # Standard USD pair (e.g., BTC-USD)
                 crypto_amount = position_size_usd / entry_price
             else:
-                crypto_amount = position_size_usd  # Assume direct pair
+                # Crypto pair (e.g., BTC-ETH): get USD price of base currency
+                usd_product_id = f"{base_currency}-USD"
+                usd_prices = data_collector.get_current_prices()
+                usd_price = usd_prices.get(usd_product_id)
+                if usd_price and usd_price > 0:
+                    crypto_amount = position_size_usd / usd_price
+                else:
+                    return {
+                        'size': 0.0,
+                        'reason': f'No USD price available for {base_currency}',
+                        'risk_amount': 0.0
+                    }
 
             # Apply maximum limits
             max_size = self._get_max_position_size(product_id, entry_price)

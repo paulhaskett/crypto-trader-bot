@@ -438,6 +438,7 @@ def run_unified_dashboard():
     logger.info("run_unified_dashboard() called")
     import uvicorn
     from src.dashboard import app
+    from fastapi import Request
     from fastapi.templating import Jinja2Templates
     from fastapi.responses import HTMLResponse
     logger.info("Imports completed successfully")
@@ -664,6 +665,8 @@ def run_unified_dashboard():
                 # Keep defaults
                 pass
 
+            trading_active = db_manager.get_trading_active()
+
             context = {
                 "portfolio": converted_portfolio,
                 "portfolio_value": total_value,
@@ -672,7 +675,8 @@ def run_unified_dashboard():
                 "daily_pnl": risk_data.get('daily_pnl', 0),
                 "formatted_daily_pnl": formatted_daily_pnl,
                 "risk_status": risk_data.get('risk_status', 'unknown'),
-                "paper_trading": engine_status.get('paper_trading', True),
+                "paper_trading": trading_engine.paper_trading,
+                "trading_active": trading_active,
                 "active_positions": engine_status.get('active_positions', 0),
                 "models_trained": len(model_status.get('models_trained', [])),
                 "current_prices": current_prices,
@@ -883,6 +887,116 @@ def run_unified_dashboard():
         except Exception as e:
             logger.error(f"Control API error: {e}")
             return {"status": "error", "message": str(e)}
+
+    @app.post("/api/settings/display_currency")
+    async def set_display_currency(request: Request):
+        """Set user's preferred display currency."""
+        try:
+            data = await request.json()
+            currency = data.get('value', 'USD').upper()
+
+            # Validate currency
+            if currency not in ['USD', 'GBP']:
+                return {"status": "error", "message": "Invalid currency. Must be USD or GBP"}
+
+            # Save user setting
+            success = db_manager.save_user_setting('display_currency', currency)
+            if success:
+                return {"status": "success", "message": f"Display currency set to {currency}"}
+            else:
+                return {"status": "error", "message": "Failed to save currency preference"}
+
+        except Exception as e:
+            logger.error(f"Display currency error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @app.post("/api/trades/clear")
+    async def clear_trades():
+        print("DEBUG: clear_trades endpoint called")
+        """Clear all trade records from database."""
+        try:
+            trades_cleared = db_manager.clear_all_trades()
+            return {
+                "success": True,
+                "message": f"Cleared {trades_cleared} trades from database"
+            }
+        except Exception as e:
+            logger.error(f"Clear trades error: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to clear trades: {str(e)}"
+            }
+
+    @app.post("/api/test-trade")
+    async def test_trade():
+        """Place a very small test trade to verify API keys work."""
+        try:
+            # Only allow in paper trading mode for safety
+            if not trading_engine.paper_trading:
+                return {
+                    "success": False,
+                    "error": "Test trades only allowed in paper trading mode"
+                }
+
+            # Place a very small test buy order (0.00001 BTC)
+            test_result = coinbase_api.place_market_order(
+                product_id="BTC-USD",
+                side="buy",
+                size=0.00001
+            )
+
+            if test_result:
+                return {
+                    "success": True,
+                    "message": "Test trade successful - API keys are working",
+                    "order_id": test_result.get('order_id', 'unknown'),
+                    "product_id": test_result.get('product_id', 'unknown')
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Test trade failed - check API keys and connection"
+                }
+
+        except Exception as e:
+            logger.error(f"Test trade error: {e}")
+            return {
+                "success": False,
+                "error": f"Test trade failed: {str(e)}"
+            }
+
+    @app.get("/api/check-api-permissions")
+    async def check_api_permissions():
+        """Check Coinbase API key permissions for diagnostics using SDK."""
+        try:
+            # Use SDK's built-in method for permissions checking
+            if coinbase_api.sdk_client:
+                permissions_result = coinbase_api.sdk_client.get_api_key_permissions()
+                return {
+                    "success": True,
+                    "permissions": {
+                        "can_view": permissions_result.can_view,
+                        "can_trade": permissions_result.can_trade,
+                        "can_transfer": permissions_result.can_transfer,
+                        "portfolio_uuid": permissions_result.portfolio_uuid,
+                        "portfolio_type": permissions_result.portfolio_type
+                    },
+                    "message": "API permissions retrieved successfully"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "SDK client not initialized",
+                    "message": "Check api_keys.env configuration and SDK availability"
+                }
+
+        except Exception as e:
+            logger.error(f"API permissions check error: {e}")
+            return {
+                "success": False,
+                "error": f"Permissions check failed: {str(e)}",
+                "message": "Verify ECDSA API keys are properly configured in api_keys.env"
+            }
 
     # Update status endpoint to use unified bot
     @app.get("/api/status")

@@ -264,6 +264,7 @@ async def dashboard(request: Request):
             "win_rate": win_rate,
             "perf_summary": perf_summary,
             "trading_active": db_manager.get_trading_active(),
+            "product_ids": settings.PRODUCT_IDS,
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -871,10 +872,10 @@ async def test_trade():
                 "error": "Test trades only allowed in paper trading mode"
             }
 
-        # Place a very small test buy order (0.00001 BTC) using USDC
+        # Place a very small test sell order (0.00001 BTC) for SOL
         test_result = coinbase_api.place_market_order(
-            product_id="BTC-USDC",
-            side="buy",
+            product_id="BTC-SOL",
+            side="sell",
             size=0.00001
         )
 
