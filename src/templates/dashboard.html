@@ -308,7 +308,7 @@
                                         {% set mc = market_conditions[product_id] if market_conditions is defined and product_id in market_conditions else {'price': 0, 'signal': 'HOLD', 'confidence': 0, 'meets_threshold': false, 'action': 'WAIT'} %}
 
                                         <div class="mb-2">
-                                            <strong class="text-primary">${{ "%.2f"|format(mc.price) }}</strong>
+                                            <strong class="text-primary">{{ mc.formatted_price }}</strong>
                                             <br><small class="text-muted">Current Price</small>
                                         </div>
 
