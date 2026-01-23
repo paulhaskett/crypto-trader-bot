@@ -770,7 +770,7 @@
             // Update navbar trading mode badge (not the activity badge)
             const navbarBadge = document.querySelector('.navbar-text .trading-mode-badge');
             if (navbarBadge) {
-                navbarBadge.className = `badge bg-${isPaperTrading ? 'success' : 'danger'} trading-mode-badge`;
+                navbarBadge.className = 'badge bg-' + (isPaperTrading ? 'success' : 'danger') + ' trading-mode-badge';
                 navbarBadge.textContent = isPaperTrading ? 'PAPER TRADING' : 'LIVE TRADING';
             }
         }
@@ -940,12 +940,12 @@
                     const age = data.exchange_rate.age_minutes;
 
                     document.getElementById('exchange-rate').textContent =
-                        `1 USD = ${rate.toFixed(4)} GBP`;
+                        '1 USD = ' + rate.toFixed(4) + ' GBP';
 
                     document.getElementById('rate-age').textContent =
-                        age ? `Updated ${Math.round(age)} min ago` : 'Age unknown';
+                        age ? 'Updated ' + Math.round(age) + ' min ago' : 'Age unknown';
 
-                    console.log(`Exchange rate updated: ${rate}, age: ${age} min`);
+                    console.log('Exchange rate updated: ' + rate + ', age: ' + age + ' min');
                 } else if (data.error) {
                     document.getElementById('exchange-rate').textContent = 'Error loading rate';
                     document.getElementById('rate-age').textContent = data.error;
@@ -1004,7 +1004,7 @@
         window.showNotification = function(message, type) {
             // Create notification element
             const notification = document.createElement('div');
-            notification.className = `alert alert-${type} alert-dismissible fade show position-fixed mt-3`;
+            notification.className = 'alert alert-' + type + ' alert-dismissible fade show position-fixed mt-3';
             notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
             // Safe HTML construction - escape message content to prevent syntax errors
             const safeMessage = String(message).replace(/</g, '&lt;').replace(/>/g, '&gt;');
