@@ -65,6 +65,9 @@
                         <a href="/" class="btn btn-outline-primary">
                             <i class="fas fa-arrow-left"></i> Back to Dashboard
                         </a>
+                        <button onclick="clearTrades()" class="btn btn-danger ms-2" id="clearTradesBtn">
+                            <i class="fas fa-trash"></i> Clear Trades
+                        </button>
                     </div>
                 </div>
             </div>
@@ -208,5 +211,72 @@
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Custom JavaScript for Trade Management -->
+    <script>
+        async function clearTrades() {
+            const button = document.getElementById('clearTradesBtn');
+            const originalText = button.innerHTML;
+            
+            // Show loading state
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Clearing...';
+            
+            try {
+                const response = await fetch('/api/trades/clear', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Show success message
+                    showAlert('success', result.message || 'Trades cleared successfully!');
+                    
+                    // Reload the page after 1 second
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                } else {
+                    showAlert('danger', result.error || 'Failed to clear trades');
+                }
+            } catch (error) {
+                showAlert('danger', 'Error clearing trades: ' + error.message);
+            } finally {
+                // Restore button state
+                button.disabled = false;
+                button.innerHTML = originalText;
+            }
+        }
+        
+        function showAlert(type, message) {
+            // Create and show an alert at the top of the page
+            const alertHtml = `
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert" style="position: fixed; top: 20px; right: 20px; z-index: 1050; min-width: 300px;">
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    <strong>${type === 'success' ? 'Success!' : 'Error!'}</strong> ${message}
+                </div>
+            `;
+            
+            // Insert alert at the beginning of body
+            document.body.insertAdjacentHTML('afterbegin', alertHtml);
+            
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                const alert = document.querySelector('.alert');
+                if (alert) {
+                    const bsAlert = new bootstrap.Alert(alert);
+                    bsAlert.close();
+                }
+            }, 5000);
+        }
+        
+// Add confirmation dialog for safety
+            }
+        });
+    </script>
 </body>
 </html>

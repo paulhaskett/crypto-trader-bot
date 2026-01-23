@@ -198,8 +198,8 @@ class TradingEngine:
                     product_id, side, size, entry_price, signal
                 )
             else:
-                order_result = self._execute_live_order(
-                    product_id, side, size, signal
+                order_result = self.execute_live_trade(
+                    product_id, side, size
                 )
 
             if order_result and order_result.get('success', False):
@@ -281,40 +281,15 @@ class TradingEngine:
             'mode': 'paper'
         }
 
-    def _execute_live_order(self, product_id: str, side: str, size: float,
-                          signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Execute a live trading order.
-
-        Args:
-            product_id: Trading pair
-            side: 'buy' or 'sell'
-            size: Position size
-            signal: Signal details
-
-        Returns:
-            Live order result
-        """
+    def execute_live_trade(self, product_id: str, side: str, size: float):
+        """Execute a live trading order."""
         try:
             # For live trading, use market orders
-            if side == 'buy':
-                    order_result = coinbase_api.place_market_order(
-                        product_id=product_id,
-                        side='buy',
-                        size=size  # Pass size parameter only
-                    )
-            else:  # sell
-                # For sells, we need to convert USD size to crypto amount
-                prices = data_collector.get_current_prices()
-                if product_id in prices:
-                    crypto_size = size / prices[product_id]
-                    order_result = coinbase_api.place_market_order(
-                        product_id=product_id,
-                        side='sell',
-                        size=crypto_size
-                    )
-                else:
-                    return {'success': False, 'error': 'Could not get current price'}
+            order_result = coinbase_api.place_market_order(
+                product_id=product_id,
+                side=side,
+                size=size
+            )
 
             if order_result:
                 # Save to database
@@ -339,141 +314,145 @@ class TradingEngine:
             logger.error(f"Live order execution failed: {e}")
             return {'success': False, 'error': str(e)}
 
+    def simple_test_method(self):
+        """Simple test method."""
+        return "test"
+
     def monitor_positions(self) -> List[Dict[str, Any]]:
-        """
-        Monitor open positions and check for exit conditions.
+            """
+            Monitor open positions and check for exit conditions.
 
-        Returns:
-            List of positions that were closed
-        """
-        closed_positions = []
+            Returns:
+                List of positions that were closed
+            """
+            closed_positions = []
 
-        for position_id, position in list(self.active_positions.items()):
-            try:
-                if position['status'] != 'open':
+            for position_id, position in list(self.active_positions.items()):
+                try:
+                    if position['status'] != 'open':
+                        continue
+
+                    product_id = position['product_id']
+                    current_prices = data_collector.get_current_prices()
+
+                    if product_id not in current_prices:
+                        continue
+
+                    current_price = current_prices[product_id]
+                    entry_price = position['entry_price']
+                    stop_loss = position['stop_loss_price']
+                    take_profits = position['take_profit_prices']
+
+                    should_close = False
+                    pnl = 0.0
+                    exit_reason = ""
+
+                    # Check stop loss
+                    if position['side'] == 'buy':
+                        if current_price <= stop_loss:
+                            should_close = True
+                            pnl = (current_price - entry_price) * position['size']
+                            exit_reason = "Stop loss hit"
+                    else:  # sell/short
+                        if current_price >= stop_loss:
+                            should_close = True
+                            pnl = (entry_price - current_price) * position['size']
+                            exit_reason = "Stop loss hit"
+
+                    # Check take profit levels
+                    if not should_close:
+                        for i, tp_price in enumerate(take_profits):
+                            if position['side'] == 'buy':
+                                if current_price >= tp_price:
+                                    should_close = True
+                                    pnl = (current_price - entry_price) * position['size']
+                                    exit_reason = f"Take profit {i+1} hit"
+                                    break
+                            else:  # sell/short
+                                if current_price <= tp_price:
+                                    should_close = True
+                                    pnl = (entry_price - current_price) * position['size']
+                                    exit_reason = f"Take profit {i+1} hit"
+                                    break
+
+                    # Close position if conditions met
+                    if should_close:
+                        self._close_position(position_id, pnl, exit_reason, current_price)
+                        closed_positions.append({
+                            'position_id': position_id,
+                            'pnl': pnl,
+                            'exit_reason': exit_reason,
+                            'exit_price': current_price
+                        })
+
+                except Exception as e:
+                    logger.error(f"Error monitoring position {position_id}: {e}")
                     continue
 
-                product_id = position['product_id']
-                current_prices = data_collector.get_current_prices()
-
-                if product_id not in current_prices:
-                    continue
-
-                current_price = current_prices[product_id]
-                entry_price = position['entry_price']
-                stop_loss = position['stop_loss_price']
-                take_profits = position['take_profit_prices']
-
-                should_close = False
-                pnl = 0.0
-                exit_reason = ""
-
-                # Check stop loss
-                if position['side'] == 'buy':
-                    if current_price <= stop_loss:
-                        should_close = True
-                        pnl = (current_price - entry_price) * position['size']
-                        exit_reason = "Stop loss hit"
-                else:  # sell/short
-                    if current_price >= stop_loss:
-                        should_close = True
-                        pnl = (entry_price - current_price) * position['size']
-                        exit_reason = "Stop loss hit"
-
-                # Check take profit levels
-                if not should_close:
-                    for i, tp_price in enumerate(take_profits):
-                        if position['side'] == 'buy':
-                            if current_price >= tp_price:
-                                should_close = True
-                                pnl = (current_price - entry_price) * position['size']
-                                exit_reason = f"Take profit {i+1} hit"
-                                break
-                        else:  # sell/short
-                            if current_price <= tp_price:
-                                should_close = True
-                                pnl = (entry_price - current_price) * position['size']
-                                exit_reason = f"Take profit {i+1} hit"
-                                break
-
-                # Close position if conditions met
-                if should_close:
-                    self._close_position(position_id, pnl, exit_reason, current_price)
-                    closed_positions.append({
-                        'position_id': position_id,
-                        'pnl': pnl,
-                        'exit_reason': exit_reason,
-                        'exit_price': current_price
-                    })
-
-            except Exception as e:
-                logger.error(f"Error monitoring position {position_id}: {e}")
-                continue
-
-        return closed_positions
+            return closed_positions
 
     def _close_position(self, position_id: str, pnl: float, reason: str, exit_price: float):
-        """
-        Close a position and update records.
+            """
+            Close a position and update records.
 
-        Args:
-            position_id: Position identifier
-            pnl: Profit/loss amount
-            reason: Reason for closing
-            exit_price: Price at which position was closed
-        """
-        if position_id in self.active_positions:
-            position = self.active_positions[position_id]
+            Args:
+                position_id: Position identifier
+                pnl: Profit/loss amount
+                reason: Reason for closing
+                exit_price: Price at which position was closed
+            """
+            if position_id in self.active_positions:
+                position = self.active_positions[position_id]
 
-            # Update position record
-            position['status'] = 'closed'
-            position['closed_at'] = datetime.now()
-            position['pnl'] = pnl
-            position['exit_reason'] = reason
-            position['exit_price'] = exit_price
+                # Update position record
+                position['status'] = 'closed'
+                position['closed_at'] = datetime.now()
+                position['pnl'] = pnl
+                position['exit_reason'] = reason
+                position['exit_price'] = exit_price
 
-            # Update risk manager
-            risk_manager.close_position(position_id, pnl)
+                # Update risk manager
+                risk_manager.close_position(position_id, pnl)
 
-            logger.info(f"Position closed: {position_id} | P&L: ${pnl:.2f} | Reason: {reason}")
+                logger.info(f"Position closed: {position_id} | P&L: ${pnl:.2f} | Reason: {reason}")
 
     def get_status(self) -> Dict[str, Any]:
-        """
-        Get current trading engine status.
+            """
+            Get current trading engine status.
 
-        Returns:
-            Dictionary with status information
-        """
-        return {
-            'paper_trading': self.paper_trading,
-            'active_positions': len(self.active_positions),
-            'positions': list(self.active_positions.keys()),
-            'last_signals': [],  # Could track recent signals
-            'risk_status': risk_manager.check_portfolio_risk(self.paper_trading)
-        }
+            Returns:
+                Dictionary with status information
+            """
+            return {
+                'paper_trading': self.paper_trading,
+                'active_positions': len(self.active_positions),
+                'positions': list(self.active_positions.keys()),
+                'last_signals': [],  # Could track recent signals
+                'risk_status': risk_manager.check_portfolio_risk(self.paper_trading)
+            }
 
     def enable_live_trading(self):
-        """Enable live trading (use with caution!)."""
-        if not self.paper_trading:
-            logger.warning("Live trading already enabled")
-            return
+            """Enable live trading (use with caution!)."""
+            if not self.paper_trading:
+                logger.warning("Live trading already enabled")
+                return
 
-        logger.warning("ENABLING LIVE TRADING - REAL MONEY WILL BE TRADED!")
-        logger.warning("Make sure you understand the risks and have tested thoroughly")
+            logger.warning("ENABLING LIVE TRADING - REAL MONEY WILL BE TRADED!")
+            logger.warning("Make sure you understand the risks and have tested thoroughly")
 
-        # Additional safety checks
-        risk_status = risk_manager.check_portfolio_risk(False)  # Check with live trading mode
-        if risk_status['risk_status'] != 'normal':
-            logger.error(f"Cannot enable live trading: Risk status is {risk_status['risk_status']}")
-            return
+            # Additional safety checks
+            risk_status = risk_manager.check_portfolio_risk(False)  # Check with live trading mode
+            if risk_status['risk_status'] != 'normal':
+                logger.error(f"Cannot enable live trading: Risk status is {risk_status['risk_status']}")
+                return
 
-        self.paper_trading = False
+            self.paper_trading = False
 
-        # Persist the trading mode change
-        from src.database import db_manager
-        db_manager.save_user_setting('paper_trading', 'false')
+            # Persist the trading mode change
+            from src.database import db_manager
+            db_manager.save_user_setting('paper_trading', 'false')
 
-        logger.info("Live trading enabled - bot will now trade with real money")
+            logger.info("Live trading enabled - bot will now trade with real money")
 
     def run_trading_cycle(self) -> Dict[str, Any]:
         """

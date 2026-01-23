@@ -6,6 +6,7 @@
 - **Platform**: Raspberry Pi 5 / Docker
 - **Architecture**: Modular FastAPI + AI/ML + SQLite
 - **Trading Mode**: Paper trading initially, real-money option available
+- **Key Dependencies**: pandas, numpy, scikit-learn, fastapi, SQLAlchemy, APScheduler
 
 ## 🐧 Build/Int/Test Commands
 
@@ -14,29 +15,36 @@
 # Install dependencies
 pip install -r requirements.txt
 
-# Run in development mode
+# Run in development mode with dashboard
 python main.py --dashboard --verbose
 
 # Run in paper trading mode (no real trades)
 python main.py --test
 
-# Run specific test file
+# Run AI model tests
 python test_ai.py
 
-# Run single test function
+# Run single test function (pattern: module_function_name)
 python -c "from test_ai import test_technical_indicators; test_technical_indicators()"
+python -c "from test_ai import test_model_training; test_model_training()"
+
+# Run with environment file check
+python -c "from config.settings import settings; print('API keys loaded:', bool(settings.COINBASE_API_KEY))"
 ```
 
 ### Code Quality
 ```bash
 # Format code with black (88 char line length)
-black src/ config/ main.py --line-length=88
+black src/ config/ main.py test_ai.py --line-length=88
 
 # Type check with mypy (ignore venv)
-mypy src/ main.py --ignore=venv/
+mypy src/ main.py --ignore=venv/ --no-error-summary
 
-# Lint with flake8 (if configured)
+# Lint with flake8 (E203, W503 are black compatible)
 flake8 src/ --max-line-length=88 --extend-ignore=E203,W503
+
+# Security check for API keys
+grep -r "API_KEY\|SECRET" --exclude-dir=venv --exclude="*.md" .
 ```
 
 ### Docker
@@ -46,6 +54,9 @@ docker-compose up --build -d
 
 # View logs
 docker-compose logs -f crypto-trader-bot
+
+# Stop and remove
+docker-compose down
 ```
 
 ## 🏗️ Code Style Guidelines
@@ -79,20 +90,25 @@ from src.trading_engine import trading_engine
 ```bash
 crypto-trader-bot/
 ├── config/              # Configuration files
-│   └── settings.py      # Application settings and constants
+│   ├── settings.py      # Application settings and constants
+│   └── api_keys.env     # Environment variables (DO NOT COMMIT)
 ├── src/                 # Core bot modules
 │   ├── ai_model.py      # Machine learning and signal generation
 │   ├── coinbase_api.py  # Coinbase API integration
+│   ├── currency_utils.py# Currency conversion utilities
 │   ├── dashboard.py     # Web dashboard with FastAPI
 │   ├── data_collector.py # Market data collection and processing
 │   ├── database.py      # Database operations with SQLAlchemy
 │   ├── risk_manager.py  # Risk management and position sizing
 │   └── trading_engine.py # Main trading logic orchestration
-├── models/              # Saved AI models
+├── models/              # Saved AI models (.joblib files)
 ├── data/                # Market data and SQLite database
 ├── logs/                # Application logs
 ├── tests/               # Unit and integration tests
-└── main.py              # Application entry point
+├── docs/                # Documentation
+├── main.py              # Application entry point
+├── test_ai.py           # AI model testing script
+└── requirements.txt     # Python dependencies
 ```
 
 ### Naming Conventions
@@ -184,3 +200,29 @@ def fetch_historical_data(product_id: str, days: int = 30):
     """Cache historical data requests."""
     pass
 ```
+
+## 🔑 Important Notes for Agents
+
+### Testing Strategy
+- **No test runner configured**: Use direct execution (`python test_ai.py`) or single function calls
+- **AI model testing**: Focus on `test_ai.py` for ML component validation
+- **Integration testing**: Test API connections with paper trading mode first
+
+### Key Integration Points
+- **Coinbase API**: Two key files - `coinbase_api.py` (basic) and Advanced Trade API integration
+- **Settings Management**: All config via `config/settings.py` using environment variables
+- **Database**: SQLite with SQLAlchemy ORM in `src/database.py`
+- **ML Pipeline**: `ai_model.py` + `data_collector.py` for signal generation
+
+### Development Workflow
+1. Always run `python main.py --test` before real trading
+2. Verify API keys loaded: check environment variables
+3. Test individual components: AI models, data collection, risk management
+4. Use dashboard (`--dashboard`) for real-time monitoring
+5. Check logs in `logs/` directory for debugging
+
+### Critical Security Reminders
+- Never commit `api_keys.env` or any API keys
+- Always use paper trading mode for development
+- Validate all API responses before processing trades
+- Monitor logs for unauthorized access attempts

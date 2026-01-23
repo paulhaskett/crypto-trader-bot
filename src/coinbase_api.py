@@ -1,8 +1,8 @@
 """
-Coinbase API wrapper using direct REST calls.
+Coinbase API wrapper using official Coinbase Advanced Python SDK.
 
 This module handles all interactions with the Coinbase Advanced Trade API
-using direct HTTP requests when the official SDK is not available.
+using the official coinbase-advanced-py SDK for better reliability and features.
 """
 
 import logging
@@ -16,13 +16,22 @@ import base64
 import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
+
+# Import official Coinbase SDK
 try:
-    import ecdsa
-    import jwt
-    ECDSA_AVAILABLE = True
+    from coinbase.rest import RESTClient
+    SDK_AVAILABLE = True
+    logging.info("Coinbase Advanced SDK loaded successfully")
 except ImportError:
-    ECDSA_AVAILABLE = False
-    logging.warning("ecdsa and jwt libraries not available for Advanced Trade API")
+    SDK_AVAILABLE = False
+    logging.warning("Coinbase Advanced SDK not available, falling back to REST implementation")
+    try:
+        import ecdsa
+        import jwt
+        ECDSA_AVAILABLE = True
+    except ImportError:
+        ECDSA_AVAILABLE = False
+        logging.warning("ecdsa and jwt libraries not available for Advanced Trade API")
 
 from config.settings import settings
 
@@ -48,6 +57,25 @@ class CoinbaseAPI:
         # Advanced Trade API credentials (for trading operations)
         self.advanced_api_key = settings.COINBASE_ADVANCED_API_KEY
         self.advanced_api_secret = settings.COINBASE_ADVANCED_API_SECRET
+
+        # Initialize official SDK client if available
+        if SDK_AVAILABLE:
+            try:
+                self.sdk_client = RESTClient(
+                    api_key=self.advanced_api_key,
+                    api_secret=self.advanced_api_secret  # Use api_secret parameter
+                )
+                logger.info("Coinbase Advanced SDK client initialized successfully")
+                logger.info(f"API Key: {self.advanced_api_key[:50]}...")
+            except Exception as e:
+                logger.error(f"Failed to initialize SDK client: {e}")
+                logger.error(f"SDK_AVAILABLE: {SDK_AVAILABLE}")
+                logger.error(f"API Key length: {len(self.advanced_api_key) if self.advanced_api_key else 0}")
+                logger.error(f"Secret length: {len(self.advanced_api_secret) if self.advanced_api_secret else 0}")
+                self.sdk_client = None
+        else:
+            self.sdk_client = None
+            logger.info("Official SDK not available, using custom REST implementation")
 
 
         # Use Coinbase Advanced Trade API for accounts, Exchange API for market data
@@ -652,7 +680,7 @@ class CoinbaseAPI:
 
     def place_market_order(self, product_id: str, side: str, size: float) -> Optional[Dict[str, Any]]:
         """
-        Place a market order using Coinbase API (Advanced Trade or Legacy fallback).
+        Place a market order using Coinbase Advanced SDK or REST fallback.
 
         Args:
             product_id: Trading pair (e.g., 'BTC-USD')
@@ -672,9 +700,46 @@ class CoinbaseAPI:
                 'mode': 'paper'
             }
 
-        # Try Advanced Trade API first
+        # Try Advanced Trade API with official SDK first
+        if self.sdk_client:
+            try:
+                logger.info(f"Placing {side.upper()} {size} {product_id} via Coinbase SDK")
+
+                # Use official SDK methods
+                if side.lower() == 'buy':
+                    order = self.sdk_client.market_order_buy(
+                        client_order_id=f"bot_{int(time.time())}",
+                        product_id=product_id,
+                        base_size=str(size)
+                    )
+                else:  # sell
+                    order = self.sdk_client.market_order_sell(
+                        client_order_id=f"bot_{int(time.time())}",
+                        product_id=product_id,
+                        base_size=str(size)
+                    )
+
+                # Extract order details from SDK response
+                if hasattr(order, 'success') and order.success:
+                    return {
+                        'success': True,
+                        'order_id': getattr(order, 'order_id', f"sdk_order_{int(time.time())}"),
+                        'size': size,
+                        'price': 0.0,  # Market orders don't have predetermined price
+                        'mode': 'live_sdk'
+                    }
+                else:
+                    logger.error(f"SDK order failed: {getattr(order, 'message', 'Unknown error')}")
+                    return {'success': False, 'error': getattr(order, 'message', 'SDK order failed')}
+
+            except Exception as e:
+                logger.error(f"SDK order failed: {e}")
+                # Fall back to REST implementation
+                logger.info("Falling back to REST implementation")
+
+        # Fallback to REST implementation
         try:
-            logger.info(f"Attempting order via Advanced Trade API: {side.upper()} {size} {product_id}")
+            logger.info(f"Attempting order via REST API: {side.upper()} {size} {product_id}")
             order_data = {
                 'client_order_id': f"bot_{int(time.time())}",
                 'product_id': product_id,
@@ -817,7 +882,13 @@ class CoinbaseAPI:
             # Format: METHOD api.coinbase.com/api/v3/brokerage/ENDPOINT
             if not uri.startswith('/'):
                 uri = f"/{uri}"
-            jwt_uri = f"{method.upper()} api.coinbase.com/api/v3/brokerage{uri}"
+
+            # Remove 'brokerage/' prefix if present to avoid duplication
+            if uri.startswith('/brokerage/'):
+                clean_uri = uri[11:]  # Remove '/brokerage/' prefix, keep the rest
+                jwt_uri = f"{method.upper()} api.coinbase.com/api/v3/brokerage/{clean_uri}"
+            else:
+                jwt_uri = f"{method.upper()} api.coinbase.com/api/v3/brokerage{uri}"
 
             # Parse the EC private key with better handling
             try:
