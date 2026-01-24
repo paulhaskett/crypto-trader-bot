@@ -211,6 +211,8 @@ class TradingEngine:
             size = signal['position_size']['size']
             entry_price = signal['entry_price']
 
+            logger.info(f"Order details: {side} {size:.8f} {product_id} at ~${entry_price:.2f}")
+
             # Execute order (paper trading or live)
             if self.paper_trading:
                 order_result = self._execute_paper_order(
@@ -220,6 +222,8 @@ class TradingEngine:
                 order_result = self.execute_live_trade(
                     product_id, side, size
                 )
+
+            logger.info(f"Order result: {order_result}")
 
             if order_result and order_result.get('success', False):
                 # Record the position
@@ -303,12 +307,15 @@ class TradingEngine:
     def execute_live_trade(self, product_id: str, side: str, size: float):
         """Execute a live trading order."""
         try:
+            logger.info(f"Placing live order: {side} {size:.8f} {product_id}")
             # For live trading, use market orders
             order_result = coinbase_api.place_market_order(
                 product_id=product_id,
                 side=side,
                 size=size
             )
+
+            logger.info(f"Live order API result: {order_result}")
 
             if order_result:
                 # Save to database

@@ -50,7 +50,7 @@ class Settings:
     TAKE_PROFIT_LEVELS: list = [1.5, 2.0, 3.0]  # Profit taking levels (ratios)
 
     # AI/ML Configuration
-    MODEL_CONFIDENCE_THRESHOLD: float = 0.60  # Further lowered to 60% to generate first trades
+    MODEL_CONFIDENCE_THRESHOLD: float = 0.50  # Temporarily lowered to 50% for testing trades
     FEATURE_WINDOW_SIZE: int = 48  # Hours of data for features (48h - more context)
     PREDICTION_HORIZON: int = 2  # Hours to predict ahead (shorter for small trades)
     CONSERVATIVE_MODE: bool = True  # Enable conservative trading mode

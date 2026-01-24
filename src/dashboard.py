@@ -231,7 +231,7 @@ async def dashboard(request: Request):
 
         # Build market conditions for AI signals
         market_conditions = {}
-        for product_id in settings.PRODUCT_IDS[:5]:  # Only first 5 for dashboard performance
+        for product_id in settings.PRODUCT_IDS:  # All pairs for complete monitoring
             try:
                 signal = ai_model.get_signal(product_id)
                 price = current_prices.get(product_id, 0)
