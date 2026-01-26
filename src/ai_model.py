@@ -555,16 +555,32 @@ class AIModel:
         models_trained = list(self.models.keys())
         models_on_disk = []
         
-        # Check for models on disk
+# Check for models on disk
         if os.path.exists(self.model_dir):
             model_files = [f for f in os.listdir(self.model_dir) if f.endswith('_model.pkl')]
             models_on_disk = [f.replace('_model.pkl', '') for f in model_files]
-
-        status = {
-            'models_trained': models_trained,
-            'models_on_disk': models_on_disk,
-            'model_dir': self.model_dir,
-            'models_trained_count': len(models_trained)
+            
+            # Map USD model files to GBP product IDs for dashboard compatibility
+            gbp_product_mapping = {
+                'BTC-USD': 'BTC-GBP',
+                'ETH-USD': 'ETH-GBP',
+                'SOL-USD': 'SOL-GBP',
+                'DOT-USD': 'DOT-GBP',
+                'ADA-USD': 'ADA-GBP',
+                'LTC-USD': 'LTC-GBP',
+                'LINK-USD': 'LINK-GBP',
+                'UNI-USD': 'UNI-GBP',
+                'AVAX-USD': 'AVAX-GBP'
+            }
+            
+            # Convert USD product IDs to GBP for models_trained list
+            models_trained = [gbp_product_mapping.get(product_id, product_id) for product_id in models_on_disk]
+            
+            status = {
+                'models_trained': models_trained,
+                'models_on_disk': models_on_disk,
+                'model_dir': self.model_dir,
+                'models_trained_count': len(models_trained)
         }
 
         # Helper function to get model info without nested scope issues
@@ -645,10 +661,26 @@ class AIModel:
             'alt_model_progress': alt_progress
         }
 
+        # Individual GBP model checks for dashboard compatibility
+        sol_info = get_model_info('SOL-USD', 'sol')
+        dot_info = get_model_info('DOT-USD', 'dot') 
+        ada_info = get_model_info('ADA-USD', 'ada')
+        ltc_info = get_model_info('LTC-USD', 'ltc')
+        uni_info = get_model_info('UNI-USD', 'uni')
+        link_info = get_model_info('LINK-USD', 'link')
+        avax_info = get_model_info('AVAX-USD', 'avax')
+
         # Merge all model info
         status.update(btc_info)
         status.update(eth_info)
         status.update(alt_info)
+        status.update(sol_info)
+        status.update(dot_info)
+        status.update(ada_info)
+        status.update(ltc_info)
+        status.update(uni_info)
+        status.update(link_info)
+        status.update(avax_info)
 
         return status
 

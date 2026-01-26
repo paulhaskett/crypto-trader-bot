@@ -312,7 +312,7 @@ async def dashboard(request: Request):
             "product_ids": settings.PRODUCT_IDS,
             "market_conditions": market_conditions,
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "gbp_balance_status": balance_manager.check_gbp_balance(),
+            "gbp_balance_status": balance_manager.check_gbp_balance() if hasattr(balance_manager, 'check_gbp_balance') else {"gbp_balance": 0.0, "status": "Unknown"},
         }
 
 
@@ -706,10 +706,6 @@ async def portfolio_debug():
                 if currency == 'USD':
                     value_display = currency_converter.convert_amount(balance, 'USD', display_currency)
                     price = 1.0
-                elif f"{currency}-USD" in current_prices:
-                    price = current_prices[f"{currency}-USD"]
-                    value_usd = balance * price
-                    value_display = currency_converter.convert_amount(value_usd, 'USD', display_currency)
                 elif currency == 'GBP':
                     # Handle GBP currency specifically - use internal conversion system
                     gbp_to_usd_rate = currency_converter.get_exchange_rate('GBP', 'USD')
@@ -718,19 +714,25 @@ async def portfolio_debug():
                         value_usd = balance / gbp_to_usd_rate  # GBP → USD conversion
                         value_gbp = balance  # Keep GBP value for GBP display
                         # Display converted USD value and GBP value
-                        value_display = currency_converter.format_currency(value_gbp, 'GBP', display_currency)
+                        price = gbp_to_usd_rate  # Set price for consistency
+                        value_display = currency_converter.format_currency(value_gbp, 'GBP', display_currency == 'GBP')
                     else:
                         # Fallback if conversion fails
                         value_usd = balance * 1.3  # Approximate 1 GBP = $1.30 USD
                         value_gbp = balance
-                        value_display = currency_converter.format_currency(value_gbp, 'GBP', display_currency)
+                        price = 1.3  # Set price for consistency
+                        value_display = currency_converter.format_currency(value_gbp, 'GBP', display_currency == 'GBP')
+                elif f"{currency}-USD" in current_prices and currency != 'GBP':
+                    price = current_prices[f"{currency}-USD"]
+                    value_usd = balance * price
+                    value_display = currency_converter.convert_amount(value_usd, 'USD', display_currency)
                 else:
                     continue
 
-                if value_display < settings.MIN_PORTFOLIO_VALUE_DISPLAY:
+                if (isinstance(value_display, str) and float(value_display.replace('£', '').replace(',', '').strip()) < settings.MIN_PORTFOLIO_VALUE_DISPLAY) or (isinstance(value_display, (int, float)) and value_display < settings.MIN_PORTFOLIO_VALUE_DISPLAY):
                     continue
 
-                total_per_asset += value_display
+                total_per_asset += float(value_display) if isinstance(value_display, str) else value_display
                 asset_breakdown_per_asset.append({
                     "currency": currency,
                     "balance": balance,

@@ -418,7 +418,8 @@ class CoinbaseAPI:
             'ETH-USD': 3100.0,
             'SOL-USD': 130.0,
             'LTC-USD': 70.0,
-            'XRP-USD': 2.00
+            'XRP-USD': 2.00,
+            'GBP-USD': 1.30
         }
         
         price = fallback_prices.get(product_id, 100.0)
