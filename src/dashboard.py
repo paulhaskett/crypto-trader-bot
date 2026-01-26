@@ -29,6 +29,7 @@ from src.ai_model import ai_model
 from src.risk_manager import risk_manager
 from src.trading_engine import trading_engine
 from src.data_collector import data_collector
+from src.balance_manager import balance_manager
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,8 @@ async def dashboard(request: Request):
             "trading_active": db_manager.get_trading_active(),
             "product_ids": settings.PRODUCT_IDS,
             "market_conditions": market_conditions,
-            "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "gbp_balance_status": balance_manager.check_gbp_balance(),
         }
 
 
@@ -666,9 +668,13 @@ async def portfolio_debug():
                 # USDC is a stablecoin pegged to $1 USD
                 value_usd = balance * 1.0
                 price = 1.0
-            elif f"{currency}-USD" in current_prices:
+            elif f"{currency}-USD" in current_prices and currency != 'GBP':
                 price = current_prices[f"{currency}-USD"]
                 value_usd = balance * price
+            elif currency == 'GBP':
+                # GBP is base currency - no conversion needed
+                price = 1.0
+                value_usd = balance
             else:
                 continue
 
@@ -704,6 +710,20 @@ async def portfolio_debug():
                     price = current_prices[f"{currency}-USD"]
                     value_usd = balance * price
                     value_display = currency_converter.convert_amount(value_usd, 'USD', display_currency)
+                elif currency == 'GBP':
+                    # Handle GBP currency specifically - use internal conversion system
+                    gbp_to_usd_rate = currency_converter.get_exchange_rate('GBP', 'USD')
+                    if gbp_to_usd_rate and gbp_to_usd_rate > 0:
+                        # Convert GBP to USD for portfolio total (internal system)
+                        value_usd = balance / gbp_to_usd_rate  # GBP → USD conversion
+                        value_gbp = balance  # Keep GBP value for GBP display
+                        # Display converted USD value and GBP value
+                        value_display = currency_converter.format_currency(value_gbp, 'GBP', display_currency)
+                    else:
+                        # Fallback if conversion fails
+                        value_usd = balance * 1.3  # Approximate 1 GBP = $1.30 USD
+                        value_gbp = balance
+                        value_display = currency_converter.format_currency(value_gbp, 'GBP', display_currency)
                 else:
                     continue
 
@@ -768,6 +788,9 @@ async def get_status():
         # Get trading state
         trading_active = db_manager.get_trading_active()
         paper_trading = trading_engine.paper_trading
+        
+        # Import currency converter for GBP handling
+        from src.currency_utils import currency_converter
 
         # Get account info
         accounts = coinbase_api.get_accounts()
@@ -778,7 +801,8 @@ async def get_status():
             for account in accounts:
                 currency = account['currency']
                 balance = account['available']
-                if balance > 0:
+                # Skip phantom USD balance - only process real holdings
+                if balance > 0 and not (currency == 'USD' and balance < 0.01):
                     value_usd = 0.0
                     if currency == 'USD':
                         value_usd = balance
@@ -787,6 +811,10 @@ async def get_status():
                         # USDC is a stablecoin pegged to $1 USD
                         value_usd = balance * 1.0
                         total_balance += value_usd
+                    elif currency == 'GBP':
+                        # GBP is base currency - don't convert to USD again
+                        value_usd = balance
+                        total_balance += balance
                     else:
                         # Try to get current price for conversion
                         try:

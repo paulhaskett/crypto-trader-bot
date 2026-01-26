@@ -43,13 +43,14 @@ class DataCollector:
 
     def get_current_prices(self) -> Dict[str, float]:
         """
-        Get current market prices for all configured trading pairs.
+        Get current market prices for all configured trading pairs AND USD equivalents.
 
         Returns:
-            Dictionary mapping product_id to current price
+            Dictionary mapping product_id to current price (includes both trading pairs and USD pairs)
         """
         prices = {}
 
+        # 1. Get existing BTC-quoted prices for trading
         for product_id in settings.PRODUCT_IDS:
             try:
                 ticker = coinbase_api.get_product_ticker(product_id)
@@ -64,7 +65,7 @@ class DataCollector:
                     if product_id in self.market_data_cache:
                         prices[product_id] = self.market_data_cache[product_id]
                         logger.warning(f"Using cached price for {product_id}")
-
+            
             except Exception as e:
                 logger.error(f"Failed to get price for {product_id}: {e}")
                 # Use cached price if available
@@ -72,6 +73,45 @@ class DataCollector:
                     prices[product_id] = self.market_data_cache[product_id]
                     logger.warning(f"Using cached price for {product_id}")
 
+        # 2. NEW: Get USD prices for base currencies (for risk management)
+        base_currencies = set()
+        for product_id in settings.PRODUCT_IDS:
+            base_currency = product_id.split('-')[0]
+            base_currencies.add(base_currency)
+        
+        # 2. Get USD prices for base currencies (for risk management)  
+        for base_currency in base_currencies:
+            usd_product_id = f"{base_currency}-USD"
+            
+            # Skip BTC-USD since we already have BTC as quote currency in GBP pairs
+            if usd_product_id in prices:
+                logger.debug(f"USD price for {base_currency} already available from existing pairs")
+                continue
+            
+            # Skip GBP-USD requests - use existing exchange rate instead
+            if base_currency == 'GBP':
+                logger.info(f"✅ SKIPPED GBP-USD request - using exchange rate instead")
+                continue
+                
+            try:
+                ticker = coinbase_api.get_product_ticker(usd_product_id)
+                price = ticker.get('price')
+                
+                if price and float(price) > 0:
+                    prices[usd_product_id] = float(price)
+                    logger.info(f"USD price for {base_currency}: ${float(price):.2f} (for risk management)")
+                else:
+                    logger.warning(f"Invalid USD price data for {usd_product_id}: {ticker}")
+                    # Use cached price if available
+                    if usd_product_id in self.market_data_cache:
+                        prices[usd_product_id] = self.market_data_cache[usd_product_id]
+                        logger.warning(f"Using cached USD price for {usd_product_id}")
+            
+            except Exception as e:
+                logger.debug(f"Could not fetch USD price for {base_currency}: {e}")
+                # This is not critical - some currencies might not have USD pairs
+                # Risk manager will handle missing USD prices gracefully
+        
         return prices
 
     def collect_historical_data(self, product_id: str, days: int = None) -> pd.DataFrame:

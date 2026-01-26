@@ -17,6 +17,7 @@ import logging
 import signal
 import time
 import threading
+import os
 from datetime import datetime
 from typing import Optional, List
 
@@ -28,6 +29,7 @@ from src.data_collector import data_collector
 from src.ai_model import ai_model
 from src.risk_manager import risk_manager
 from src.trading_engine import trading_engine
+from src.balance_manager import balance_manager
 
 # Configure logging
 logging.basicConfig(
@@ -56,8 +58,17 @@ class UnifiedBot:
         self.trading_thread = None
         self.status_listeners = []  # WebSocket connections for real-time updates
         self.shutdown_event = threading.Event()
+        
+        # Add timing tracking for countdown
+        self.last_cycle_time = time.time()
+        self.cycle_count = 0
 
         logger.info(f"Unified Bot initialized - Trading active: {self.trading_active}")
+        
+        # Fix trading state consistency on startup
+        if self.trading_active:
+            logger.info("Trading flag is True but will check thread state on first start attempt")
+            # Don't start trading immediately - let start() method handle thread creation
 
     def add_status_listener(self, listener):
         """Add a status listener (WebSocket connection)."""
@@ -82,10 +93,56 @@ class UnifiedBot:
                 self.remove_status_listener(listener)
 
     def start_trading(self) -> bool:
-        """Start the trading engine."""
-        if self.trading_active:
-            logger.warning("Trading already active")
+        """Starts trading engine."""
+        # Check if trading is already active AND thread is actually running
+        if self.trading_active and self.trading_thread and self.trading_thread.is_alive():
+            logger.warning("Trading already active and thread is running")
             return False
+
+        # If trading flag is set but thread is not running, reset and start
+        if self.trading_active and (not self.trading_thread or not self.trading_thread.is_alive()):
+            logger.warning("Trading flag set but thread not running - resetting and starting fresh")
+            self.trading_active = False  # Reset to allow start
+
+        if not self.trading_thread or not self.trading_thread.is_alive():
+            logger.info("Starting trading engine...")
+            self.trading_active = True
+            
+            # Persist trading state to database
+            db_manager.set_trading_active(True)
+            
+            self.trading_thread = threading.Thread(target=self._trading_loop, daemon=True)
+            self.trading_thread.start()
+
+            # Broadcast status update
+            self.broadcast_status({
+                "type": "status_update",
+                "trading_active": True,
+                "paper_trading": trading_engine.paper_trading,
+                "message": "Trading engine started"
+            })
+
+            return True
+        else:
+            logger.warning("Trading thread already running")
+            return False
+
+    def reset_trading_state(self) -> bool:
+        """Reset inconsistent trading state."""
+        logger.info("Resetting inconsistent trading state - clearing trading flag")
+        self.trading_active = False
+        db_manager.set_trading_active(False)
+        
+        # Wait a moment to ensure state clears
+        import time
+        time.sleep(1)
+        
+        return True
+
+        # If trading flag is set but thread is not running, reset and start
+        if self.trading_active and (not self.trading_thread or not self.trading_thread.is_alive()):
+            logger.warning("Trading flag set but thread not running - resetting and starting fresh")
+            self.trading_active = False  # Reset to allow start
 
         if not self.trading_thread or not self.trading_thread.is_alive():
             logger.info("Starting trading engine...")
@@ -164,6 +221,11 @@ class UnifiedBot:
                     })
 
                     self.broadcast_status(status_update)
+                    
+                    # Update cycle timing for countdown
+                    self.last_cycle_time = time.time()
+                    self.cycle_count += 1
+                    logger.debug(f"Cycle #{self.cycle_count} completed at {self.last_cycle_time}")
 
                 # Sleep between cycles
                 logger.debug(f"Sleeping for {settings.MARKET_CHECK_INTERVAL} seconds...")
@@ -521,6 +583,22 @@ def run_unified_dashboard():
                 # Fetch prices for all currencies found in wallet
                 for currency in currencies_needing_prices:
                     if currency != 'USD' and f"{currency}-USD" not in current_prices:
+                        # Skip GBP-USD requests - use exchange rate from dashboard instead
+                        if currency == 'GBP':
+                            # Get GBP-USD rate from existing exchange rate (USD->GBP inverted)
+                            try:
+                                portfolio_response = await risk_manager.check_portfolio_risk()
+                                if 'exchange_rate' in portfolio_response:
+                                    usd_to_gbp_rate = portfolio_response['exchange_rate'].get('usd_to_display', 0)
+                                    if usd_to_gbp_rate > 0:
+                                        gbp_to_usd_rate = 1 / usd_to_gbp_rate
+                                        current_prices["GBP-USD"] = gbp_to_usd_rate
+                                        logger.debug(f"Using inverted exchange rate for GBP-USD: {gbp_to_usd_rate}")
+                                        continue
+                            except Exception as e:
+                                logger.debug(f"Could not get exchange rate for GBP: {e}")
+                        
+                        # For other currencies, try USD pairs
                         try:
                             ticker = coinbase_api.get_product_ticker(f"{currency}-USD")
                             price = ticker.get('price')
@@ -860,7 +938,13 @@ def run_unified_dashboard():
 
             elif action == "retrain_models":
                 result = ai_model.retrain_all_models()
-                return {"status": "success", "message": f"Models retrained"}
+                success_count = sum(1 for r in result.values() if r.get('success', False))
+                total_count = len(result)
+                return {
+                    "status": "success", 
+                    "message": f"Models retrained: {success_count}/{total_count} successful",
+                    "details": result
+                }
             
             elif action == "emergency_stop":
                 try:
@@ -1009,6 +1093,75 @@ def run_unified_dashboard():
             logger.error(f"Status API error: {e}")
             return {"error": str(e)}
 
+    @app.get("/api/models/status")
+    def get_models_status():
+        """Get AI model status for all trading pairs."""
+        try:
+            # Check each configured product ID
+            models_status = {}
+            working_count = 0
+            error_count = 0
+            
+            for product_id in settings.PRODUCT_IDS:
+                try:
+                    # Check if model exists and is working
+                    if os.path.exists(f"models/{product_id}_model.pkl"):
+                        # Test if model can be loaded
+                        try:
+                            prediction = ai_model.predict(product_id)
+                            if prediction is not None:
+                                models_status[product_id] = "working"
+                                working_count += 1
+                            else:
+                                models_status[product_id] = "error"
+                                error_count += 1
+                        except Exception:
+                            models_status[product_id] = "error"
+                            error_count += 1
+                    else:
+                        models_status[product_id] = "not_trained"
+                        error_count += 1
+                except Exception as e:
+                    models_status[product_id] = "error"
+                    error_count += 1
+            
+            return {
+                "success": True,
+                "total_products": len(settings.PRODUCT_IDS),
+                "working_models": working_count,
+                "error_models": error_count,
+                "models": models_status
+            }
+        except Exception as e:
+            logger.error(f"Models status error: {e}")
+            return {"success": False, "error": str(e)}
+
+    @app.get("/api/countdown")
+    async def get_countdown():
+        """Get countdown timing for next trading cycle."""
+        try:
+            import time
+            from datetime import datetime
+            
+            now = time.time()
+            last_cycle = getattr(unified_bot, 'last_cycle_time', now)
+            interval = settings.MARKET_CHECK_INTERVAL
+            elapsed = now - last_cycle
+            remaining = max(0, interval - elapsed)
+            progress = min(100, (elapsed / interval) * 100)
+            
+            return {
+                "remaining_seconds": int(remaining),
+                "elapsed_seconds": int(elapsed),
+                "progress_percent": progress,
+                "last_cycle_time": datetime.fromtimestamp(last_cycle).strftime("%H:%M:%S"),
+                "interval_minutes": interval // 60,
+                "trading_active": unified_bot.trading_active
+            }
+        except Exception as e:
+            logger.error(f"Countdown API error: {e}")
+            return {"error": str(e)}
+
     # Add trades endpoint
     @app.get("/api/trades")
     async def get_trades(limit: int = 20):
@@ -1018,6 +1171,28 @@ def run_unified_dashboard():
             return {"trades": trades or []}
         except Exception as e:
             logger.error(f"Trades API error: {e}")
+            return {"error": str(e)}
+
+    # Add GBP balance endpoint
+    @app.get("/api/gbp-balance")
+    async def get_gbp_balance():
+        """Get GBP balance status with alert levels."""
+        try:
+            balance_status = balance_manager.check_gbp_balance()
+            return balance_status
+        except Exception as e:
+            logger.error(f"GBP balance API error: {e}")
+            return {"error": str(e)}
+
+    # Add trading state reset endpoint
+    @app.post("/api/trading/reset")
+    async def reset_trading_state():
+        """Reset inconsistent trading state."""
+        try:
+            unified_bot.reset_trading_state()
+            return {"success": True, "message": "Trading state reset successfully"}
+        except Exception as e:
+            logger.error(f"Trading state reset error: {e}")
             return {"error": str(e)}
 
     # Add portfolio endpoint
@@ -1090,6 +1265,55 @@ def run_unified_dashboard():
             logger.error(f"Portfolio API error: {e}")
             return {"error": str(e)}
 
+    # Add trading state reset endpoint
+    @app.post("/api/trading/reset")
+    async def reset_trading_state_endpoint():
+        """Reset inconsistent trading state."""
+        try:
+            unified_bot.reset_trading_state()
+            return {"success": True, "message": "Trading state reset successfully"}
+        except Exception as e:
+            logger.error(f"Trading state reset error: {e}")
+            return {"error": str(e)}
+
+    # Add comprehensive debugging endpoint BEFORE starting uvicorn
+    @app.get("/api/debug/comprehensive")
+    async def comprehensive_debug():
+        """Comprehensive debugging endpoint for trading engine issues."""
+        try:
+            debug_info = {
+                "timestamp": datetime.now().isoformat(),
+                "unified_bot_state": {
+                    "trading_active": unified_bot.trading_active,
+                    "trading_thread_alive": unified_bot.trading_thread.is_alive() if unified_bot.trading_thread else False,
+                    "shutdown_event_set": unified_bot.shutdown_event.is_set(),
+                    "cycle_count": getattr(unified_bot, 'cycle_count', 0),
+                    "last_cycle_time": getattr(unified_bot, 'last_cycle_time', None)
+                },
+                "trading_engine_state": trading_engine.get_status(),
+                "portfolio_risk": risk_manager.check_portfolio_risk(),
+                "settings": {
+                    "market_check_interval": settings.MARKET_CHECK_INTERVAL,
+                    "max_daily_trades": settings.MAX_DAILY_TRADES,
+                    "max_position_size": settings.MAX_POSITION_SIZE,
+                    "model_confidence_threshold": settings.MODEL_CONFIDENCE_THRESHOLD
+                },
+                "api_status": {
+                    "api_key_present": bool(coinbase_api.api_key),
+                    "sdk_client_available": bool(coinbase_api.sdk_client)
+                },
+                "coinbase_accounts": coinbase_api.get_accounts()[:5] if hasattr(coinbase_api, 'get_accounts') else [],
+                "gbp_balance_status": balance_manager.check_gbp_balance()
+            }
+            return debug_info
+        except Exception as e:
+            import traceback
+            return {
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "debug_failed": True
+            }
+
     # Setup signal handlers for graceful shutdown
     def signal_handler(signum, frame):
         logger.info(f"Received signal {signum}, shutting down...")
@@ -1100,6 +1324,14 @@ def run_unified_dashboard():
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
+        # Start the trading engine BEFORE starting the dashboard server
+        logger.info("Starting trading engine...")
+        trading_started = unified_bot.start_trading()
+        if trading_started:
+            logger.info("Trading engine started successfully")
+        else:
+            logger.warning("Trading engine failed to start or was already running")
+        
         # Start the FastAPI server
         logger.info(f"Starting unified dashboard on http://0.0.0.0:{settings.DASHBOARD_PORT}")
         uvicorn.run(
@@ -1114,7 +1346,6 @@ def run_unified_dashboard():
         logger.error(f"Dashboard error: {e}")
     finally:
         unified_bot.shutdown()
-
 
 if __name__ == "__main__":
     main()

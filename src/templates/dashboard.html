@@ -90,6 +90,54 @@
                 if (ageElement) ageElement.textContent = 'Retry later';
             }
         };
+
+        // Countdown update function - defined globally for immediate access
+        window.updateCountdown = async function() {
+            try {
+                const response = await fetch('/api/countdown');
+                const data = await response.json();
+
+                if (data.error) {
+                    console.error('Countdown error:', data.error);
+                    return;
+                }
+
+                const timerElement = document.getElementById('countdown-timer');
+                const progressElement = document.getElementById('countdown-progress');
+                const lastCycleElement = document.getElementById('last-cycle-time');
+
+                if (timerElement && data.trading_active) {
+                    const minutes = Math.floor(data.remaining_seconds / 60);
+                    const seconds = data.remaining_seconds % 60;
+                    timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                    timerElement.className = `h4 ${data.remaining_seconds < 300 ? 'text-danger' : 'text-warning'}`;
+                } else if (timerElement) {
+                    timerElement.textContent = 'PAUSED';
+                    timerElement.className = 'h4 text-secondary';
+                }
+
+                if (progressElement) {
+                    progressElement.style.width = `${data.progress_percent}%`;
+                    progressElement.className = `progress-bar ${data.progress_percent > 80 ? 'bg-danger' : 'bg-warning'}`;
+                }
+
+                if (lastCycleElement) {
+                    lastCycleElement.textContent = `Last: ${data.last_cycle_time}`;
+                }
+
+            } catch (error) {
+                console.error('Failed to update countdown:', error);
+                const timerElement = document.getElementById('countdown-timer');
+                if (timerElement) timerElement.textContent = 'Error';
+            }
+        };
+
+        // Start countdown updates after page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCountdown();
+            setInterval(updateCountdown, 1000);  // Update every second
+        });
+
     </script>
 </head>
 <body class="bg-light">
@@ -256,7 +304,68 @@
                     </div>
                 </div>
             </div>
+            <div class="col-md-3">
+                <div class="card metric-card border-{{ 'success' if gbp_status == 'normal' else 'warning' if gbp_status == 'warning' else 'danger' }}">
+                    <div class="card-body text-center">
+                        <h5 class="card-title text-{{ 'success' if gbp_status == 'normal' else 'warning' if gbp_status == 'warning' else 'danger' }}">
+                            <i class="fas fa-pound-sign"></i> GBP Balance
+                        </h5>
+                        <div class="h4">£{{ "%.2f"|format(gbp_balance_status.gbp_balance) }}</div>
+                        <small class="text-muted">
+                            {% if gbp_status == 'critical' %}
+                                <strong>Critical Low!</strong> Top up recommended
+                            {% elif gbp_status == 'warning' %}
+                                <strong>Warning:</strong> Low balance
+                            {% else %}
+                                Balance healthy
+                            {% endif %}
+                        </small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metric-card border-warning">
+                    <div class="card-body text-center">
+                        <h5 class="card-title text-warning">
+                            <i class="fas fa-hourglass-half"></i> Next Trading Cycle
+                        </h5>
+                        <div id="countdown-timer" class="h4 text-warning">Loading...</div>
+                        <small class="text-muted" id="last-cycle-time">--</small>
+                        <div class="progress mt-2" style="height: 6px;">
+                            <div id="countdown-progress" class="progress-bar bg-warning" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
+
+        <!-- GBP Balance Alert -->
+        {% if gbp_status == 'critical' or gbp_status == 'warning' %}
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="alert alert-{{ 'danger' if gbp_status == 'critical' else 'warning' }} alert-dismissible fade show">
+                    <h5><i class="fas fa-exclamation-triangle"></i> GBP Balance Alert</h5>
+                    <p>
+                        {% if gbp_status == 'critical' %}
+                            <strong>Critical:</strong> GBP balance is below £{{ "%.2f"|format(gbp_critical_threshold) }}. 
+                            Trading will continue but consider topping up your GBP wallet to maintain trading activity.
+                        {% elif gbp_status == 'warning' %}
+                            <strong>Warning:</strong> GBP balance is below £{{ "%.2f"|format(gbp_warning_threshold) }}. 
+                            Consider topping up soon to avoid running low.
+                        {% endif %}
+                    </p>
+                    <hr>
+                    <p class="mb-0">
+                        <small>
+                            <strong>Future Automation Note:</strong> 
+                            This system will be enhanced with automated crypto→GBP conversion capabilities 
+                            to automatically restore balance when levels get low.
+                        </small>
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
 
         <!-- Risk Status Alert -->
         {% if risk_status != 'normal' %}
@@ -402,7 +511,7 @@
         <!-- Enhanced AI Models Grid -->
         <div class="row mb-4">
             <div class="col-12">
-                <h3 class="mb-4"><i class="fas fa-brain"></i> AI Models <span class="badge bg-{{ 'success' if models_info.models_trained > 0 else 'secondary' }}">{{ models_info.models_trained }}</span></h3>
+                <h3 class="mb-4"><i class="fas fa-brain"></i> AI Models <span class="badge bg-{{ 'success' if models_info and models_info.models_trained_count and models_info.models_trained_count > 0 else 'secondary' }}">{{ models_info.models_trained_count }}</span></h3>
                 
                 <div class="row">
                     <!-- Bitcoin Model -->
@@ -607,8 +716,38 @@
     <!-- Custom JavaScript (loaded in head for immediate availability) -->
     <script>
         // Simple dashboard JavaScript - essential functions only
+        
+        // Debounce mechanism to prevent rapid repeated calls
+        let isProcessing = false;
+        const debounceTime = 2000; // 2 seconds between similar actions
+        let lastAction = '';
+        let lastActionTime = 0;
+        
+        function debounceAction(action) {
+            const now = Date.now();
+            if (isProcessing && action === lastAction && (now - lastActionTime) < debounceTime) {
+                console.log('Action debounced:', action);
+                return false;
+            }
+            lastAction = action;
+            lastActionTime = now;
+            return true;
+        }
         window.controlBot = function(action) {
             console.log('Control bot called with action:', action);
+            
+            // Prevent rapid repeated actions
+            if (!debounceAction(action)) {
+                try {
+                    if (window.showNotification) {
+                        window.showNotification('Please wait before repeating this action', 'warning');
+                    }
+                } catch (error) {
+                    console.error('Error showing wait notification:', error);
+                    alert('Please wait before repeating this action'); // Fallback
+                }
+                return;
+            }
 
             let confirmMessage = '';
             switch(action) {
@@ -626,6 +765,19 @@
             }
 
             if (confirm(confirmMessage)) {
+                // Set processing state
+                isProcessing = true;
+                
+                // Show immediate loading state
+                try {
+                    if (window.showNotification) {
+                        window.showNotification(`Processing ${action.replace('_', ' ')}...`, 'info');
+                    }
+                } catch (error) {
+                    console.error('Error showing processing notification:', error);
+                    alert(`Processing ${action.replace('_', ' ')}...`); // Fallback
+                }
+
                 fetch('/api/control/' + action, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
@@ -635,22 +787,59 @@
                     console.log('Action completed:', action, data);
                     if (data.status === 'success') {
                         if (action === 'retrain_models') {
-                            location.reload(); // Reload page to show updated model status
+                            try {
+                                if (window.showNotification) {
+                                    const successCount = data.details ? Object.values(data.details).filter(r => r.success).length : 0;
+                                    const totalCount = data.details ? Object.keys(data.details).length : 0;
+                                    window.showNotification(`Models trained: ${successCount}/${totalCount} successful`, 'success');
+                                }
+                            } catch (error) {
+                                console.error('Error showing retrain notification:', error);
+                                alert('Models training completed'); // Fallback
+                            }
+                            setTimeout(() => location.reload(), 2000);
                             return;
                         }
-                        alert(data.message || 'Success!');
+                        
+                        // Show success notification instead of alert
+                        try {
+                            if (window.showNotification) {
+                                window.showNotification(data.message || 'Success!', 'success');
+                            }
+                        } catch (error) {
+                            console.error('Error showing success notification:', error);
+                            alert(data.message || 'Success!'); // Fallback
+                        }
 
-                        // Refresh trading status after start/stop actions
+                        // Refresh trading status immediately for start/stop actions
                         if (action === 'start_trading' || action === 'stop_trading') {
-                            updateTradingStatusFromAPI();
+                            // Update status immediately from response if available
+                            if (data.trading_active !== undefined) {
+                                updateTradingStatus(data.trading_active);
+                            } else {
+                                // Fallback to API call
+                                updateTradingStatusFromAPI();
+                            }
                         }
                     } else {
-                        alert(data.message || 'Failed');
+                        if (window.showNotification) {
+                            showNotification(data.message || 'Failed', 'danger');
+                        } else {
+                            alert(data.message || 'Failed');
+                        }
                     }
                 })
                 .catch(error => {
                     console.error('Network error:', error);
-                    alert('Network error occurred');
+                    if (window.showNotification) {
+                        showNotification('Network error occurred', 'danger');
+                    } else {
+                        alert('Network error occurred');
+                    }
+                })
+                .finally(() => {
+                    // Clear processing state
+                    isProcessing = false;
                 });
             }
         };
@@ -662,17 +851,7 @@
 
 
         window.updateTradingStatus = function(isActive) {
-            // Update trading status banner
-            const banner = document.getElementById('tradingStatusBanner');
-            if (banner) {
-                if (isActive) {
-                    banner.className = 'alert alert-success alert-dismissible fade show position-fixed';
-                    banner.style.display = 'block';
-                    document.getElementById('tradingStatusMessage').textContent = 'Bot is actively monitoring markets';
-                } else {
-                    banner.style.display = 'none';
-                }
-            }
+            console.log('updateTradingStatus called with:', isActive);
 
             // Update trading activity badge in navbar
             const activityBadge = document.getElementById('tradingActivityBadge');
@@ -696,20 +875,29 @@
             if (stopBtn) {
                 stopBtn.parentElement.style.display = isActive ? 'inline-block' : 'none';
             }
+
+            // Show notification for status change
+            if (window.showNotification) {
+                const message = isActive ? 'Trading started successfully' : 'Trading stopped';
+                const type = isActive ? 'success' : 'warning';
+                showNotification(message, type);
+            }
         };
 
-        // Function to update trading status from API
-        async function updateTradingStatusFromAPI() {
+        // Function to update trading status from API - made globally accessible
+        window.updateTradingStatusFromAPI = async function() {
             try {
                 const response = await fetch('/api/status');
                 const data = await response.json();
                 if (data.trading && data.trading.active !== undefined) {
                     updateTradingStatus(data.trading.active);
+                } else if (data.trading_active !== undefined) {
+                    updateTradingStatus(data.trading_active);
                 }
             } catch (error) {
                 console.error('Failed to fetch trading status:', error);
             }
-        }
+        };
 
         // Update status on page load and every 30 seconds
         document.addEventListener('DOMContentLoaded', function() {
@@ -736,7 +924,41 @@
             }, 3000);
         };
 
+        // Test function for debugging JavaScript functionality
+        window.testFunctions = function() {
+            console.log('=== JavaScript Function Test ===');
+            console.log('controlBot:', typeof window.controlBot);
+            console.log('updateTradingStatus:', typeof window.updateTradingStatus);
+            console.log('updateTradingStatusFromAPI:', typeof window.updateTradingStatusFromAPI);
+            console.log('showNotification:', typeof window.showNotification);
+            console.log('changeCurrency:', typeof window.changeCurrency);
+            console.log('updateExchangeRate:', typeof window.updateExchangeRate);
+            
+            // Test trading status update
+            if (window.showNotification) {
+                showNotification('JavaScript test successful!', 'success');
+            }
+            
+            // Test API connection
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('API Status Test:', data);
+                    if (window.showNotification) {
+                        showNotification('API connection working', 'info');
+                    }
+                })
+                .catch(error => {
+                    console.error('API Test Error:', error);
+                    if (window.showNotification) {
+                        showNotification('API connection failed', 'danger');
+                    }
+                });
+        };
+
         console.log('✅ JavaScript loading completed - controlBot available:', typeof window.controlBot);
+        console.log('✅ updateTradingStatusFromAPI available:', typeof window.updateTradingStatusFromAPI);
+        console.log('✅ testFunctions available:', typeof window.testFunctions);
     </script>
 
     <!-- Bootstrap JS -->

@@ -1,0 +1,51 @@
+INFO:__main__:Trading Bot initialized
+INFO:__main__:Trading pairs: ['ETH-BTC', 'SOL-BTC', 'LINK-BTC', 'LTC-BTC', 'ADA-BTC', 'DOT-BTC', 'AVAX-BTC', 'UNI-BTC']
+INFO:__main__:Sandbox mode: False
+INFO:__main__:Starting unified dashboard with trading engine...
+INFO:__main__:run_unified_dashboard() called
+INFO:__main__:Imports completed successfully
+INFO:__main__:Starting unified dashboard on http://0.0.0.0:8000
+INFO:     Started server process [642080]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:40768 - "GET /api/debug/comprehensive HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:42206 - "GET /api/health HTTP/1.1" 404 Not Found
+DEBUG:src.coinbase_api:Endpoint: 'brokerage/accounts', Base URL: 'https://api.coinbase.com/api/v3', Final URL: 'https://api.coinbase.com/api/v3/brokerage/accounts'
+DEBUG:src.coinbase_api:Using authenticated endpoint: https://api.coinbase.com/api/v3/brokerage/accounts
+DEBUG:src.coinbase_api:Successfully parsed EC private key directly
+DEBUG:src.coinbase_api:JWT token generated successfully for GET /brokerage/accounts
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.coinbase.com:443 "GET /api/v3/brokerage/accounts HTTP/1.1" 200 None
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/XRP-USD/ticker HTTP/1.1" 200 156
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/SOL-USD/ticker HTTP/1.1" 200 156
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/AMP-USD/ticker HTTP/1.1" 200 154
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/GRT-USD/ticker HTTP/1.1" 200 157
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/LTC-USD/ticker HTTP/1.1" 200 155
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/BTC-USD/ticker HTTP/1.1" 200 158
+INFO:     127.0.0.1:42208 - "GET /api/status HTTP/1.1" 200 OK
+DEBUG:src.coinbase_api:Endpoint: 'brokerage/accounts', Base URL: 'https://api.coinbase.com/api/v3', Final URL: 'https://api.coinbase.com/api/v3/brokerage/accounts'
+DEBUG:src.coinbase_api:Using authenticated endpoint: https://api.coinbase.com/api/v3/brokerage/accounts
+DEBUG:src.coinbase_api:Successfully parsed EC private key directly
+DEBUG:src.coinbase_api:JWT token generated successfully for GET /brokerage/accounts
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.coinbase.com:443 "GET /api/v3/brokerage/accounts HTTP/1.1" 200 None
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/XRP-USD/ticker HTTP/1.1" 200 155
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/SOL-USD/ticker HTTP/1.1" 200 159
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/AMP-USD/ticker HTTP/1.1" 200 152
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/GRT-USD/ticker HTTP/1.1" 200 155
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/LTC-USD/ticker HTTP/1.1" 200 158
+DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): api.exchange.coinbase.com:443
+DEBUG:urllib3.connectionpool:https://api.exchange.coinbase.com:443 "GET /products/BTC-USD/ticker HTTP/1.1" 200 157
+INFO:     127.0.0.1:51260 - "GET /api/status HTTP/1.1" 200 OK

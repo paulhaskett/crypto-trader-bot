@@ -152,14 +152,41 @@ class RiskManager:
                 usd_product_id = f"{base_currency}-USD"
                 usd_prices = data_collector.get_current_prices()
                 usd_price = usd_prices.get(usd_product_id)
+                
                 if usd_price and usd_price > 0:
                     crypto_amount = position_size_usd / usd_price
+                    logger.debug(f"Using USD price for {base_currency}: ${usd_price:.6f} → {crypto_amount:.8f} {base_currency}")
                 else:
-                    return {
-                        'size': 0.0,
-                        'reason': f'No USD price available for {base_currency}',
-                        'risk_amount': 0.0
-                    }
+                    # ENHANCED: Try fallback using existing trading pair prices
+                    logger.warning(f"USD price not available for {base_currency}, attempting fallback calculation")
+                    
+                    # Fallback 1: If we have BTC-quoted pair, derive USD price
+                    btc_usd_price = usd_prices.get('BTC-USD')
+                    current_pair_price = usd_prices.get(product_id)
+                    
+                    if btc_usd_price and current_pair_price:
+                        if f"{base_currency}-BTC" in usd_prices:
+                            # Calculate implied USD price from BTC pair
+                            implied_usd_price = current_pair_price * btc_usd_price
+                            crypto_amount = position_size_usd / implied_usd_price
+                            logger.info(f"Fallback: Using implied USD price for {base_currency}: ${implied_usd_price:.6f}")
+                        else:
+                            # Fallback 2: Use portfolio value percentage estimate
+                            logger.warning(f"Using fallback position sizing for {base_currency}")
+                            # Use minimum position size as conservative fallback
+                            crypto_amount = settings.MIN_TRADE_AMOUNT / entry_price if entry_price > 0 else 0.001
+                            return {
+                                'size': crypto_amount,
+                                'reason': f'Using fallback sizing for {base_currency} (no USD price)',
+                                'risk_amount': risk_amount,
+                                'fallback_used': True
+                            }
+                    else:
+                        return {
+                            'size': 0.0,
+                            'reason': f'No USD price available for {base_currency} and no fallback possible',
+                            'risk_amount': 0.0
+                        }
 
             # Apply maximum limits
             max_size = self._get_max_position_size(product_id, entry_price)
@@ -250,7 +277,7 @@ class RiskManager:
         return True
 
     def calculate_stop_loss(self, entry_price: float, direction: str,
-                           volatility: float = None) -> float:
+                           volatility: Optional[float] = None) -> float:
         """
         Calculate appropriate stop loss price.
 
@@ -343,13 +370,37 @@ class RiskManager:
         # Get performance summary
         perf_summary = db_manager.get_performance_summary(days=30)
 
+        # Check GBP balance for alerts
+        gbp_balance = 0.0
+        try:
+            # Get GBP balance from coinbase (use available balance like debug endpoint)
+            accounts = coinbase_api.get_accounts()
+            for account in accounts:
+                if account.get('currency') == 'GBP':
+                    gbp_balance = float(account.get('available_balance', account.get('balance', 0)))
+                    logger.debug(f"Found GBP balance: {gbp_balance} from available_balance")
+                    break
+        except Exception as e:
+            logger.warning(f"Failed to get GBP balance for monitoring: {e}")
+        
+        # Determine GBP status
+        gbp_status = 'normal'
+        if gbp_balance < settings.GBP_CRITICAL_THRESHOLD:
+            gbp_status = 'critical'
+        elif gbp_balance < settings.GBP_WARNING_THRESHOLD:
+            gbp_status = 'warning'
+            
         risk_assessment = {
             'portfolio_value': self.portfolio_value,
             'daily_pnl': self.daily_pnl,
             'daily_pnl_pct': (self.daily_pnl / self.portfolio_value) if self.portfolio_value > 0 else 0,
             'open_positions': len(self.open_positions),
             'monthly_performance': perf_summary,
-            'risk_status': 'normal'
+            'risk_status': 'normal',
+            'gbp_balance': gbp_balance,
+            'gbp_status': gbp_status,
+            'gbp_warning_threshold': settings.GBP_WARNING_THRESHOLD,
+            'gbp_critical_threshold': settings.GBP_CRITICAL_THRESHOLD
         }
 
         # Assess risk status

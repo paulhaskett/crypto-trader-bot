@@ -14,6 +14,7 @@ import hmac
 import hashlib
 import base64
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
@@ -92,6 +93,16 @@ class CoinbaseAPI:
         # Rate limiting
         self._last_request_time = 0
         self._rate_limit_delay = 0.1  # 100ms between requests
+        
+        # Proxy configuration
+        self.use_proxy = settings.USE_PROXY
+        self.proxy_config = {}
+        if self.use_proxy:
+            self.proxy_config = {
+                'http': f'http://{settings.PROXY_HOST}:{settings.COINBASE_API_PROXY_PORT}',
+                'https': f'http://{settings.PROXY_HOST}:{settings.COINBASE_API_PROXY_PORT}'
+            }
+            logger.info(f"Proxy configured: {self.proxy_config}")
         
         if not self.api_key or not self.api_secret:
             logger.warning("Coinbase API credentials not found. Using paper trading mode.")
@@ -176,7 +187,9 @@ class CoinbaseAPI:
             self._last_request_time = time.time()
 
             # Make request
-            response = requests.request(method, url, headers=headers, json=data)
+            response = requests.request(method, url, headers=headers, json=data, 
+                                   proxies=self.proxy_config if self.use_proxy else None, 
+                                   timeout=settings.PROXY_TIMEOUT if self.use_proxy else 30)
             response.raise_for_status()
 
             return response.json()
@@ -197,7 +210,9 @@ class CoinbaseAPI:
             self._last_request_time = time.time()
             
             # Make request
-            response = requests.request(method, url, headers=headers, json=data)
+            response = requests.request(method, url, headers=headers, json=data,
+                                   proxies=self.proxy_config if self.use_proxy else None,
+                                   timeout=settings.PROXY_TIMEOUT if self.use_proxy else 30)
             response.raise_for_status()
             
             return response.json()
@@ -489,15 +504,20 @@ class CoinbaseAPI:
         """
         try:
             logger.info(f"Attempting order via Legacy API: {side.upper()} {size} {product_id}")
-
+            
+            # Skip GBP-USD requests which cause 404 errors
+            if product_id == 'GBP-USD':
+                logger.warning(f"Skipping GBP-USD request - this pair doesn't exist and causes 404 errors")
+                return self._get_fallback_ticker(product_id)
+            
             # For legacy API, convert size to appropriate format
             order_data = {
                 'product_id': product_id,
-                'side': side.lower(),  # Legacy API uses lowercase
+                'side': side.lower(), # Legacy API uses lowercase
                 'type': 'market',
                 'size': str(size)
             }
-
+            
             # Use legacy API endpoint and authentication
             response = self._make_legacy_request('POST', 'orders', order_data)
 
@@ -556,7 +576,9 @@ class CoinbaseAPI:
                 'CB-ACCESS-PASSPHRASE': ''  # Empty for Coinbase Pro
             }
 
-            response = requests.request(method, url, headers=headers, data=body, timeout=30)
+            response = requests.request(method, url, headers=headers, data=body, 
+                                   proxies=self.proxy_config if self.use_proxy else None,
+                                   timeout=settings.PROXY_TIMEOUT if self.use_proxy else 30)
 
             # Rate limiting
             current_time = time.time()
@@ -768,55 +790,103 @@ class CoinbaseAPI:
         Returns:
             Order result dictionary with order_id, size, price if successful, None otherwise
         """
+        order_start_time = time.time()
+        logger.info(f"[DEBUG] ===== ORDER PLACEMENT STARTED ======")
+        logger.info(f"[DEBUG] Timestamp: {datetime.now().isoformat()}")
+        logger.info(f"[DEBUG] Product ID: {product_id}")
+        logger.info(f"[DEBUG] Side: {side.upper()}")
+        logger.info(f"[DEBUG] Size: {size}")
+        logger.info(f"[DEBUG] API Key Present: {bool(self.api_key)}")
+        logger.info(f"[DEBUG] SDK Client Available: {bool(self.sdk_client)}")
+        
+        # Check current account balances before order
+        try:
+            accounts = self.get_accounts()
+            logger.info(f"[DEBUG] Available accounts: {len(accounts)}")
+            for account in accounts[:5]:  # Show first 5 accounts
+                currency = account.get('currency', 'UNKNOWN')
+                available = float(account.get('available', 0))
+                if available > 0:
+                    logger.info(f"[DEBUG] Account {currency}: {available} available")
+        except Exception as e:
+            logger.error(f"[DEBUG] Error getting account balances: {e}")
+
         if not self.api_key:
-            logger.warning("Cannot place order: No API credentials (paper trading mode)")
-            return {
+            logger.warning("[DEBUG] Cannot place order: No API credentials (paper trading mode)")
+            paper_result = {
                 'success': True,
                 'order_id': f"paper_order_{int(time.time())}",
                 'size': size,
                 'price': 0.0,
                 'mode': 'paper'
             }
+            logger.info(f"[DEBUG] Paper trade result: {paper_result}")
+            return paper_result
 
         # Try Advanced Trade API with official SDK first
         if self.sdk_client:
             try:
-                logger.info(f"Placing {side.upper()} {size} {product_id} via Coinbase SDK")
+                logger.info(f"[DEBUG] Placing order via Coinbase SDK...")
+                client_order_id = f"bot_{int(time.time())}"
+                logger.info(f"[DEBUG] Client Order ID: {client_order_id}")
 
                 # Use official SDK methods
                 if side.lower() == 'buy':
+                    logger.info(f"[DEBUG] Using SDK market_order_buy...")
                     order = self.sdk_client.market_order_buy(
-                        client_order_id=f"bot_{int(time.time())}",
+                        client_order_id=client_order_id,
                         product_id=product_id,
                         base_size=str(size)
                     )
                 else:  # sell
+                    logger.info(f"[DEBUG] Using SDK market_order_sell...")
                     order = self.sdk_client.market_order_sell(
-                        client_order_id=f"bot_{int(time.time())}",
+                        client_order_id=client_order_id,
                         product_id=product_id,
                         base_size=str(size)
                     )
 
+                logger.info(f"[DEBUG] SDK order response type: {type(order)}")
+                logger.info(f"[DEBUG] SDK order response attributes: {dir(order)}")
+                
                 # Extract order details from SDK response
                 if hasattr(order, 'success') and order.success:
-                    return {
+                    order_id = getattr(order, 'order_id', f"sdk_order_{int(time.time())}")
+                    sdk_result = {
                         'success': True,
-                        'order_id': getattr(order, 'order_id', f"sdk_order_{int(time.time())}"),
+                        'order_id': order_id,
                         'size': size,
                         'price': 0.0,  # Market orders don't have predetermined price
-                        'mode': 'live_sdk'
+                        'mode': 'live_sdk',
+                        'response_time': round(time.time() - order_start_time, 2)
                     }
+                    logger.info(f"[DEBUG] SDK order SUCCESS: {sdk_result}")
+                    return sdk_result
                 else:
-                    logger.error(f"SDK order failed: {getattr(order, 'message', 'Unknown error')}")
-                    return {'success': False, 'error': getattr(order, 'message', 'SDK order failed')}
+                    error_msg = getattr(order, 'message', 'Unknown error')
+                    error_details = getattr(order, 'error_details', 'No details')
+                    logger.error(f"[DEBUG] SDK order FAILED: {error_msg}")
+                    logger.error(f"[DEBUG] SDK error details: {error_details}")
+                    
+                    failed_result = {
+                        'success': False,
+                        'error': error_msg,
+                        'error_details': error_details,
+                        'order_id': None,
+                        'mode': 'live_sdk_failed'
+                    }
+                    logger.error(f"[DEBUG] SDK failed result: {failed_result}")
+                    return failed_result
 
             except Exception as e:
-                logger.error(f"SDK order failed: {e}")
+                logger.error(f"[DEBUG] SDK order EXCEPTION: {e}")
+                import traceback
+                logger.error(f"[DEBUG] SDK exception traceback: {traceback.format_exc()}")
                 # Fall back to REST implementation
 
         # Fallback to REST implementation
         try:
-            logger.info(f"Attempting order via REST API: {side.upper()} {size} {product_id}")
+            logger.info(f"[DEBUG] Attempting order via REST API...")
             order_data = {
                 'client_order_id': f"bot_{int(time.time())}",
                 'product_id': product_id,
@@ -827,17 +897,24 @@ class CoinbaseAPI:
                     }
                 }
             }
+            
+            logger.info(f"[DEBUG] REST order data: {order_data}")
+            logger.info(f"[DEBUG] Making POST request to brokerage/orders...")
 
             response = self._make_request('POST', 'brokerage/orders', order_data)
-
+            
+            logger.info(f"[DEBUG] REST response type: {type(response)}")
+            logger.info(f"[DEBUG] REST response: {response}")
+            
             if response and 'order_id' in response:
                 # Extract order details from response
-                result = {
+                rest_result = {
                     'success': True,
                     'order_id': response['order_id'],
                     'size': size,
                     'price': 0.0,  # Market orders don't have predetermined price
-                    'mode': 'live'
+                    'mode': 'live_rest',
+                    'response_time': round(time.time() - order_start_time, 2)
                 }
 
                 # Try to get actual execution price if available
@@ -847,30 +924,60 @@ class CoinbaseAPI:
                         market_info = config['market_market_ioc']
                         if 'quote_size' in market_info:
                             try:
-                                result['price'] = float(market_info['quote_size']) / size
-                            except:
-                                pass
+                                rest_result['price'] = float(market_info['quote_size']) / size
+                            except Exception as e:
+                                logger.warning(f"[DEBUG] Could not calculate execution price: {e}")
 
-                logger.info(f"Advanced Trade API order placed: {result['order_id']}")
-                return result
+                logger.info(f"[DEBUG] REST order SUCCESS: {rest_result}")
+                return rest_result
             elif response and 'error' in response:
                 error_msg = response.get('message', 'Unknown error')
+                error_response = {
+                    'success': False,
+                    'error': error_msg,
+                    'full_response': response,
+                    'mode': 'live_rest_failed'
+                }
+                
                 if 'account is not available' in error_msg:
-                    logger.warning("Advanced Trade API permissions not available (check API key has 'trade' permission), trying legacy API...")
+                    logger.warning("[DEBUG] Advanced Trade API permissions not available (check API key has 'trade' permission), trying legacy API...")
                     # Fall back to legacy API
                     return self._place_legacy_order(product_id, side, size)
                 else:
-                    logger.error(f"Advanced Trade API error: {error_msg}")
-                    return None
+                    logger.error(f"[DEBUG] REST order FAILED: {error_msg}")
+                    logger.error(f"[DEBUG] Full error response: {error_response}")
+                    return error_response
             else:
-                logger.error("Advanced Trade API: No response received")
-                return None
+                no_response_error = {
+                    'success': False,
+                    'error': 'No response received',
+                    'mode': 'live_rest_no_response'
+                }
+                logger.error("[DEBUG] REST order: No response received")
+                return no_response_error
 
         except Exception as e:
-            logger.error(f"Advanced Trade API failed: {e}")
-            logger.info("Falling back to legacy Coinbase API...")
+            logger.error(f"[DEBUG] REST API EXCEPTION: {e}")
+            import traceback
+            logger.error(f"[DEBUG] REST exception traceback: {traceback.format_exc()}")
+            logger.info("[DEBUG] Falling back to legacy Coinbase API...")
             # Fall back to legacy API
-            return self._place_legacy_order(product_id, side, size)
+            try:
+                legacy_result = self._place_legacy_order(product_id, side, size)
+                legacy_result['response_time'] = round(time.time() - order_start_time, 2)
+                logger.info(f"[DEBUG] Legacy fallback result: {legacy_result}")
+                return legacy_result
+            except Exception as legacy_e:
+                logger.error(f"[DEBUG] Legacy API also failed: {legacy_e}")
+                return {
+                    'success': False,
+                    'error': f'Both SDK and REST failed: {str(e)}, legacy error: {str(legacy_e)}',
+                    'mode': 'all_failed'
+                }
+        
+        finally:
+            total_time = round(time.time() - order_start_time, 2)
+            logger.info(f"[DEBUG] ===== ORDER PLACEMENT COMPLETED in {total_time}s ======")
 
     def cancel_order(self, order_id: str) -> bool:
         """

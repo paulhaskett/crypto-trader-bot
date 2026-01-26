@@ -43,7 +43,7 @@ class TradingEngine:
         # Load persisted trading mode, default to paper trading
         from src.database import db_manager
         persisted_mode = db_manager.get_user_setting('paper_trading', 'true')
-        self.paper_trading = persisted_mode.lower() == 'true'
+        self.paper_trading = persisted_mode.lower() == 'true' if persisted_mode else True
 
         self.active_positions = {}
         self.last_trade_time = {}  # Initialize last trade time tracking
@@ -140,6 +140,11 @@ class TradingEngine:
             # Get volatility for stop loss calculation
             features = data_collector.get_latest_features(product_id)
             volatility = features.get('volatility', entry_price * 0.02)  # Fallback
+
+            # Ensure volatility is not None for stop loss calculation
+            if volatility is None or volatility <= 0:
+                volatility = entry_price * 0.02  # Use fallback if None
+                logger.debug(f"Using fallback volatility for {product_id}: {volatility}")
 
             # Calculate stop loss
             direction = 'long' if signal['prediction'] == 1 else 'short'

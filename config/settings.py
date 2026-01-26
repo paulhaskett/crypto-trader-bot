@@ -26,10 +26,10 @@ class Settings:
     COINBASE_ADVANCED_API_SECRET: str = os.getenv('TRADING_COINBASE_API_KEY_SECRET', COINBASE_API_SECRET)
 
     # Trading Configuration
-    BASE_CURRENCY: str = 'USD'  # Primary base currency for portfolio valuation
+    BASE_CURRENCY: str = 'GBP'  # Primary base currency for portfolio valuation
     BASE_CURRENCIES: list = ['USD', 'USDC']  # Support USD valuation for risk management
     QUOTE_CURRENCIES: list = ['BTC', 'ETH', 'SOL', 'XRP', 'LTC']  # Cryptos available for trading
-    PRODUCT_IDS: list = ['ETH-BTC', 'SOL-BTC', 'LINK-BTC', 'LTC-BTC', 'ADA-BTC', 'DOT-BTC', 'AVAX-BTC', 'UNI-BTC']  # 8 BTC-quoted crypto pairs (replaced delisted pairs)
+    PRODUCT_IDS: list = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP', 'LTC-GBP', 'DOT-GBP', 'ADA-GBP', 'LINK-GBP', 'UNI-GBP']  # 8 GBP pairs only - removed AVAX-USD to fix model training conflicts
     FOCUS_CURRENCIES: list = ['BTC', 'ETH', 'SOL', 'XRP', 'LTC']  # Complete multi-currency focus
     DIVERSIFY_AFTER_VALUE: float = 50.0  # Add more cryptos after portfolio reaches $50
 
@@ -38,22 +38,22 @@ class Settings:
     MAX_PORTFOLIO_CURRENCIES: int = 20  # Limit display to top 20 currencies by value
 
     # Risk Management
-    MAX_POSITION_SIZE: float = 0.008  # Maximum 0.8% of portfolio per trade (~$0.13 for $15.69 portfolio)
-    MAX_DAILY_TRADES: int = 3  # Maximum trades per day (conservative for learning)
-    MAX_CONCURRENT_POSITIONS: int = 1  # Maximum open positions at once
+    MAX_POSITION_SIZE: float = 0.0001  # Maximum 0.01% of portfolio per trade (ultra-conservative - ~£0.0021 for £21.05 portfolio)
+    MAX_DAILY_TRADES: int = 8  # Maximum trades per day (day trading frequency)
+    MAX_CONCURRENT_POSITIONS: int = 2  # Maximum open positions at once (balanced approach)
     MIN_TRADE_AMOUNT: float = 0.01  # Minimum absolute trade amount in USD (reduced for small crypto amounts)
     MAX_CRYPTO_EXPOSURE: float = 0.5  # Maximum 50% exposure to any single crypto
     PAPER_TRADING_PORTFOLIO_VALUE: float = 10000.0  # Default $10k for paper trading
 
     # Stop Loss Configuration
     STOP_LOSS_ATR_MULTIPLIER: float = 1.5  # ATR-based stop loss multiplier
-    TAKE_PROFIT_LEVELS: list = [1.5, 2.0, 3.0]  # Profit taking levels (ratios)
+    TAKE_PROFIT_LEVELS: list = [2.0, 3.0]  # Profit taking levels for day trading (2-3% gains)
 
     # AI/ML Configuration
     MODEL_CONFIDENCE_THRESHOLD: float = 0.50  # Temporarily lowered to 50% for testing trades
     FEATURE_WINDOW_SIZE: int = 48  # Hours of data for features (48h - more context)
     PREDICTION_HORIZON: int = 2  # Hours to predict ahead (shorter for small trades)
-    CONSERVATIVE_MODE: bool = True  # Enable conservative trading mode
+    CONSERVATIVE_MODE: bool = False  # Enable day trading mode
 
     # Data Collection
     CANDLE_GRANULARITY: str = "ONE_HOUR"  # 1-hour candles
@@ -84,9 +84,21 @@ class Settings:
     DASHBOARD_PORT: int = 8000
 
     # Currency Configuration
-    DISPLAY_CURRENCY: str = 'USD'  # Default display currency (options: 'USD', 'GBP')
+    DISPLAY_CURRENCY: str = 'GBP'  # Default display currency (options: 'USD', 'GBP')
     SUPPORTED_CURRENCIES: list = ['USD', 'GBP']  # Supported display currencies
     CURRENCY_CACHE_DURATION: int = 3600  # Cache exchange rates for 1 hour
+    
+    # Balance Monitoring
+    GBP_WARNING_THRESHOLD: float = 10.0  # Warning when < £10
+    GBP_CRITICAL_THRESHOLD: float = 5.0   # Critical when < £5
+    
+    # Network Proxy Configuration
+    USE_PROXY: bool = False  # Temporarily disable proxy for testing
+    PROXY_HOST: str = 'crypto-trader-nginx'  # Nginx container hostname
+    COINBASE_API_PROXY_PORT: int = 3128  # Port for Coinbase Advanced API
+    EXCHANGE_API_PROXY_PORT: int = 3129  # Port for Coinbase Exchange API
+    PROXY_TIMEOUT: int = 30  # Proxy connection timeout
+    PROXY_VERIFY_SSL: bool = True  # SSL verification through proxy
 
     def __init__(self):
         """Initialize settings and validate configuration."""

@@ -134,7 +134,15 @@ class CurrencyConverter:
             url = "https://api.coinbase.com/v2/exchange-rates"
             params = {'currency': 'USD'}
             
-            response = requests.get(url, params=params, timeout=10)
+            # Configure proxy if enabled
+            proxy_config = {}
+            if hasattr(settings, 'USE_PROXY') and settings.USE_PROXY:
+                proxy_config = {
+                    'http': f'http://{settings.PROXY_HOST}:{settings.COINBASE_API_PROXY_PORT}',
+                    'https': f'http://{settings.PROXY_HOST}:{settings.COINBASE_API_PROXY_PORT}'
+                }
+            
+            response = requests.get(url, params=params, timeout=10, proxies=proxy_config if proxy_config else None)
             response.raise_for_status()
             
             data = response.json()

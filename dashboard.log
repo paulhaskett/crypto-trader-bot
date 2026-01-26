@@ -1,0 +1,8 @@
+WARNING:__main__:Trading already active
+WARNING:__main__:Trading engine failed to start or was already running
+INFO:     Started server process [863491]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
