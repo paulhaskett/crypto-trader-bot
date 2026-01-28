@@ -38,9 +38,9 @@ class Settings:
     MAX_PORTFOLIO_CURRENCIES: int = 20  # Limit display to top 20 currencies by value
 
     # Risk Management
-    MAX_POSITION_SIZE: float = 0.0001  # Maximum 0.01% of portfolio per trade (ultra-conservative - ~£0.0021 for £21.05 portfolio)
+    MAX_POSITION_SIZE: float = 0.02  # 2% of portfolio per trade (enables more trading activity)
     MAX_DAILY_TRADES: int = 8  # Maximum trades per day (day trading frequency)
-    MAX_CONCURRENT_POSITIONS: int = 2  # Maximum open positions at once (balanced approach)
+    MAX_CONCURRENT_POSITIONS: int = 4  # Maximum open positions at once (balanced approach)
     MIN_TRADE_AMOUNT: float = 0.01  # Minimum absolute trade amount in USD (reduced for small crypto amounts)
     MAX_CRYPTO_EXPOSURE: float = 0.5  # Maximum 50% exposure to any single crypto
     PAPER_TRADING_PORTFOLIO_VALUE: float = 10000.0  # Default $10k for paper trading
@@ -50,7 +50,7 @@ class Settings:
     TAKE_PROFIT_LEVELS: list = [2.0, 3.0]  # Profit taking levels for day trading (2-3% gains)
 
     # AI/ML Configuration
-    MODEL_CONFIDENCE_THRESHOLD: float = 0.50  # Temporarily lowered to 50% for testing trades
+    MODEL_CONFIDENCE_THRESHOLD: float = 0.50  # Set to 50% to enable more trading opportunities
     FEATURE_WINDOW_SIZE: int = 48  # Hours of data for features (48h - more context)
     PREDICTION_HORIZON: int = 2  # Hours to predict ahead (shorter for small trades)
     CONSERVATIVE_MODE: bool = False  # Enable day trading mode

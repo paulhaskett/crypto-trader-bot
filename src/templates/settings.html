@@ -48,9 +48,11 @@
 
     <div class="container mt-4">
         <div class="row mb-4">
-            <div class="col-md-12">
-                <h2><i class="fas fa-cogs"></i> Bot Settings & Configuration</h2>
+            <div class="col-12">
+                <h2><i class="fas fa-cogs"></i> Settings</h2>
+                <p class="text-muted">Configure your trading bot preferences and currency settings</p>
             </div>
+        </div>
         </div>
 
         <!-- Trading Mode -->
@@ -81,6 +83,73 @@
             </div>
         </div>
 
+        <!-- Currency Configuration -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-coins"></i> Currency Configuration</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">
+                                        <i class="fas fa-eye"></i> Display Currency
+                                    </label>
+                                    <select id="settingsCurrencySelector" class="form-select" onchange="changeSettingsCurrency(this.value)">
+                                        <option value="USD" {{ 'selected' if display_currency == 'USD' else '' }}>USD - US Dollar</option>
+                                        <option value="GBP" {{ 'selected' if display_currency == 'GBP' else '' }}>GBP - British Pound</option>
+                                    </select>
+                                    <small class="text-muted">Currency for displaying portfolio values and prices on dashboard</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">
+                                        <i class="fas fa-chart-line"></i> Base Currency
+                                    </label>
+                                    <select id="baseCurrencySelector" class="form-select" onchange="changeBaseCurrency(this.value)">
+                                        <option value="USD" {{ 'selected' if base_currency == 'USD' else '' }}>USD - US Dollar</option>
+                                        <option value="GBP" {{ 'selected' if base_currency == 'GBP' else '' }}>GBP - British Pound</option>
+                                    </select>
+                                    <small class="text-muted fw-bold text-warning">Trading pairs will be updated (requires restart)</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row mt-3">
+                            <div class="col-md-12">
+                                <div class="alert alert-info">
+                                    <h6><i class="fas fa-info-circle"></i> Currency Information</h6>
+                                    <div class="row">
+                                        <div class="col-md-4">
+                                            <strong>Current Display:</strong> {{ display_currency }}<br>
+                                            <strong>Current Base:</strong> {{ base_currency }}
+                                        </div>
+                                        {% if currency_info and currency_info.exchange_rates %}
+                                        <div class="col-md-4">
+                                            <strong>Exchange Rate:</strong><br>
+                                            1 USD = {{ "%.4f"|format(currency_info.exchange_rates.usd_to_gbp) }} GBP<br>
+                                            1 GBP = {{ "%.4f"|format(currency_info.exchange_rates.gbp_to_usd) }} USD
+                                        </div>
+                                        {% endif %}
+                                        {% if currency_info and currency_info.trading_pairs %}
+                                        <div class="col-md-4">
+                                            <strong>Trading Pairs:</strong><br>
+                                            {{ currency_info.trading_pairs|length }} pairs configured<br>
+                                            <small class="text-muted">{{ currency_info.trading_pairs[:3]|join(', ', '...') }}</small>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Display Settings -->
         <div class="row mb-4">
             <div class="col-md-12">
@@ -92,23 +161,23 @@
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label class="form-label">Display Currency</label>
-                                    <select id="settingsCurrencySelector" class="form-select" onchange="changeSettingsCurrency(this.value)">
-                                        <option value="USD" {{ 'selected' if display_currency == 'USD' else '' }}>USD - US Dollar</option>
-                                        <option value="GBP" {{ 'selected' if display_currency == 'GBP' else '' }}>GBP - British Pound</option>
+                                    <label class="form-label">Theme</label>
+                                    <select class="form-select" disabled>
+                                        <option>Light Theme</option>
+                                        <option>Dark Theme (Coming Soon)</option>
                                     </select>
-                                    <small class="text-muted">Currency for displaying portfolio values and prices</small>
+                                    <small class="text-muted">Choose your dashboard theme</small>
                                 </div>
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label class="form-label">Current Exchange Rate</label>
-                                    <div class="input-group">
-                                        <span class="input-group-text">1 USD =</span>
-                                        <input type="text" class="form-control" id="exchangeRateDisplay" readonly>
-                                        <span class="input-group-text">GBP</span>
-                                    </div>
-                                    <small class="text-muted">Real-time exchange rate (updates hourly)</small>
+                                    <label class="form-label">Refresh Rate</label>
+                                    <select class="form-select" disabled>
+                                        <option>Real-time</option>
+                                        <option>30 seconds</option>
+                                        <option>1 minute</option>
+                                    </select>
+                                    <small class="text-muted">Dashboard data refresh frequency</small>
                                 </div>
                             </div>
                         </div>
@@ -358,14 +427,53 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
-                    showNotification(`Currency changed to ${currency}`, 'success');
-                    location.reload(); // Reload to update all displayed values
+                    showNotification(`Display currency changed to ${currency}`, 'success');
+                    setTimeout(() => location.reload(), 1000); // Reload to update all displayed values
                 } else {
-                    showNotification(`Failed to change currency: ${data.message}`, 'danger');
+                    showNotification(`Failed to change display currency: ${data.message}`, 'danger');
                 }
             })
             .catch(error => {
-                showNotification(`Error changing currency: ${error}`, 'danger');
+                showNotification(`Error changing display currency: ${error}`, 'danger');
+            });
+        }
+
+        function changeBaseCurrency(currency) {
+            if (!confirm(`Changing base currency to ${currency} will:\n\n• Update all trading pairs (${currency}-based)\n• Restart the trading system\n• May require AI model retraining\n\nContinue?`)) {
+                // Reset selector to current value
+                const selector = document.getElementById('baseCurrencySelector');
+                if (selector) {
+                    selector.value = '{{ base_currency }}';
+                }
+                return;
+            }
+            
+            fetch('/api/settings/base_currency', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: currency })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showNotification(`Base currency changed to ${currency}. Trading pairs updated.`, 'success');
+                    setTimeout(() => location.reload(), 2000); // Reload to show updated pairs
+                } else {
+                    showNotification(`Failed to change base currency: ${data.message}`, 'danger');
+                    // Reset selector to current value
+                    const selector = document.getElementById('baseCurrencySelector');
+                    if (selector) {
+                        selector.value = '{{ base_currency }}';
+                    }
+                }
+            })
+            .catch(error => {
+                showNotification(`Error changing base currency: ${error}`, 'danger');
+                // Reset selector to current value
+                const selector = document.getElementById('baseCurrencySelector');
+                if (selector) {
+                    selector.value = '{{ base_currency }}';
+                }
             });
         }
 
@@ -420,6 +528,13 @@
         document.getElementById('tradingModeToggle').addEventListener('change', function() {
             const action = this.checked ? 'enable_live_trading' : 'switch_to_paper_trading';
             controlBot(action);
+        });
+
+        // Update exchange rate on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateExchangeRate();
+            // Update exchange rate every 5 minutes
+            setInterval(updateExchangeRate, 300000);
         });
 
         document.getElementById('emergencyStopToggle').addEventListener('change', function() {

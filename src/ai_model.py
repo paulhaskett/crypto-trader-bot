@@ -590,7 +590,9 @@ class AIModel:
             current_models_trained = list(self.models.keys())
             
             # Try to load model if it exists on disk but not in memory
-            if product_id in models_on_disk and product_id not in current_models_trained:
+            # Map GBP product to USD filename for disk check
+            usd_filename = product_id.replace('GBP', 'USD')
+            if usd_filename in models_on_disk and product_id not in current_models_trained:
                 logger.info(f"Loading {product_id} model during status check")
                 self._load_model(product_id)
                 # Update our list reference
@@ -662,13 +664,13 @@ class AIModel:
         }
 
         # Individual GBP model checks for dashboard compatibility
-        sol_info = get_model_info('SOL-USD', 'sol')
-        dot_info = get_model_info('DOT-USD', 'dot') 
-        ada_info = get_model_info('ADA-USD', 'ada')
-        ltc_info = get_model_info('LTC-USD', 'ltc')
-        uni_info = get_model_info('UNI-USD', 'uni')
-        link_info = get_model_info('LINK-USD', 'link')
-        avax_info = get_model_info('AVAX-USD', 'avax')
+        sol_info = get_model_info('SOL-GBP', 'sol')
+        dot_info = get_model_info('DOT-GBP', 'dot') 
+        ada_info = get_model_info('ADA-GBP', 'ada')
+        ltc_info = get_model_info('LTC-GBP', 'ltc')
+        uni_info = get_model_info('UNI-GBP', 'uni')
+        link_info = get_model_info('LINK-GBP', 'link')
+        avax_info = get_model_info('AVAX-GBP', 'avax')
 
         # Merge all model info
         status.update(btc_info)

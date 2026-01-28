@@ -325,11 +325,11 @@ class TradingEngine:
             if order_result:
                 # Save to database
                 trade_data = {
-                    'order_id': order_result['order_id'],
+                    'order_id': order_result.get('order_id', 'N/A'),
                     'product_id': product_id,
                     'side': side,
-                    'size': order_result['size'],
-                    'price': order_result['price'],
+                    'size': order_result.get('size', 0.0),
+                    'price': order_result.get('price', 0.0),
                     'timestamp': datetime.now(),
                     'status': 'filled',
                     'pnl': 0.0,
@@ -484,6 +484,7 @@ class TradingEngine:
             db_manager.save_user_setting('paper_trading', 'false')
 
             logger.info("Live trading enabled - bot will now trade with real money")
+
 
     def run_trading_cycle(self) -> Dict[str, Any]:
         """

@@ -216,79 +216,33 @@ class DatabaseManager:
         session = self.get_session()
         try:
             query = session.query(Trade).order_by(Trade.timestamp.desc())
-
+            
             if product_id:
                 query = query.filter(Trade.product_id == product_id)
-
+            
             trades = query.limit(limit).all()
-
-            result = []
-            for trade in trades:
-                result.append({
+            
+            return [
+                {
                     'id': trade.id,
                     'order_id': trade.order_id,
                     'product_id': trade.product_id,
                     'side': trade.side,
                     'size': trade.size,
                     'price': trade.price,
-                    'timestamp': trade.timestamp.isoformat(),
+                    'timestamp': trade.timestamp,
                     'status': trade.status,
                     'pnl': trade.pnl,
                     'fees': trade.fees
-                })
-
-            return result
-
+                }
+                for trade in trades
+            ]
+            
         except Exception as e:
-            logger.error(f"Failed to update trade P&L: {e}")
-            return False
+            logger.error(f"Failed to get trades: {e}")
+            return []
         finally:
             session.close()
-
-    def clear_all_trades(self) -> int:
-        """
-        Delete all trades from the database.
-
-        This method removes all simulated/test trades while preserving
-        user settings and market data cache.
-
-        Returns:
-            Number of trades deleted
-        """
-        session = self.get_session()
-        try:
-            deleted_count = session.query(Trade).delete()
-            session.commit()
-            logger.info(f"Deleted {deleted_count} trades from database")
-            return deleted_count
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Failed to clear trades: {e}")
-            return 0
-        finally:
-            session.close()
-
-    def set_trading_active(self, active: bool) -> bool:
-        """
-        Set the trading active state.
-
-        Args:
-            active: Whether trading should be active
-
-        Returns:
-            True if updated successfully
-        """
-        return self.save_user_setting('trading_active', str(active).lower(), 'boolean')
-
-    def get_trading_active(self) -> bool:
-        """
-        Get the current trading active state.
-
-        Returns:
-            True if trading is active, False otherwise
-        """
-        setting = self.get_user_setting('trading_active', 'false')
-        return setting.lower() == 'true' if setting else False
 
     def update_trade_pnl(self, order_id: str, pnl: float, fees: float = 0.0) -> bool:
         """
@@ -319,6 +273,29 @@ class DatabaseManager:
             session.rollback()
             logger.error(f"Failed to update trade P&L: {e}")
             return False
+        finally:
+            session.close()
+
+    def clear_all_trades(self) -> int:
+        """
+        Delete all trades from the database.
+
+        This method removes all simulated/test trades while preserving
+        user settings and market data cache.
+
+        Returns:
+            Number of trades deleted
+        """
+        session = self.get_session()
+        try:
+            deleted_count = session.query(Trade).delete()
+            session.commit()
+            logger.info(f"Deleted {deleted_count} trades from database")
+            return deleted_count
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to clear trades: {e}")
+            return 0
         finally:
             session.close()
 
@@ -361,7 +338,7 @@ class DatabaseManager:
             session.close()
 
     def get_market_data(self, product_id: str, start_date: datetime = None,
-                       end_date: datetime = None) -> List[Dict[str, Any]]:
+                        end_date: datetime = None) -> List[Dict[str, Any]]:
         """
         Retrieve historical market data from the database.
 
@@ -583,6 +560,28 @@ class DatabaseManager:
             return {}
         finally:
             session.close()
+
+    def get_trading_active(self) -> bool:
+        """
+        Get the current trading active state.
+
+        Returns:
+            True if trading is active, False otherwise
+        """
+        setting = self.get_user_setting('trading_active', 'false')
+        return setting.lower() == 'true' if setting else False
+
+    def set_trading_active(self, active: bool) -> bool:
+        """
+        Set the trading active state.
+
+        Args:
+            active: Whether trading should be active
+
+        Returns:
+            True if updated successfully
+        """
+        return self.save_user_setting('trading_active', str(active).lower(), 'boolean')
 
 
 # Global database instance

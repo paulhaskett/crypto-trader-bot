@@ -54,278 +54,279 @@ static_dir.mkdir(exist_ok=True)
 
 # Temporarily disabled to use main.py route
 # @app.get("/", response_class=HTMLResponse)
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    """Main dashboard page showing overview of bot status."""
-    try:
-        # Get portfolio data with currency conversion
-        from src.currency_utils import currency_converter
+# @app.get("/", response_class=HTMLResponse)
+# async def dashboard(request: Request):
+#     """Main dashboard page showing overview of bot status."""
+#     try:
+#         # Get portfolio data with currency conversion
+#         from src.currency_utils import currency_converter
+# 
+#         # Get user's preferred display currency
+#         display_currency = db_manager.get_user_setting('display_currency', 'USD') or 'USD'
+# 
+#         # Check trading mode to determine data source
+#         if trading_engine.paper_trading:
+#             # Paper trading: show simulated portfolio
+#             portfolio = [
+#                 {
+#                     "currency": "USD",
+#                     "balance": settings.PAPER_TRADING_PORTFOLIO_VALUE,
+#                     "price": 1.0,
+#                     "value_usd": settings.PAPER_TRADING_PORTFOLIO_VALUE,
+#                     "percentage": 100.0
+#                 }
+#             ]
+#             total_value_usd = settings.PAPER_TRADING_PORTFOLIO_VALUE
+#             current_prices = {}  # Not needed for paper trading
+#         else:
+#             # Live trading: show real Coinbase balances for ALL currencies with assets
+#             accounts = coinbase_api.get_accounts()
+#             current_prices = data_collector.get_current_prices()
+# 
+#             portfolio = []
+#             total_value_usd = 0.0
+# 
+#             # Collect all currencies that need price data
+#             currencies_needing_prices = set()
+# 
+#             for account in accounts:
+#                 currency = account['currency']
+#                 balance = account['available']
+# 
+#                 # Skip zero balances
+#                 if balance <= 0:
+#                     continue
+# 
+#                 # Only add currencies that need price lookups (not USD or USDC)
+#                 if currency not in ['USD', 'USDC']:
+#                     currencies_needing_prices.add(currency)
+# 
+#             # Fetch prices for all currencies found in wallet
+#             for currency in currencies_needing_prices:
+#                 if currency != 'USD' and f"{currency}-USD" not in current_prices:
+#                     try:
+#                         ticker = coinbase_api.get_product_ticker(f"{currency}-USD")
+#                         price = ticker.get('price')
+#                         if price and price > 0:
+#                             current_prices[f"{currency}-USD"] = price
+#                     except Exception as e:
+#                         logger.debug(f"Could not fetch price for {currency}-USD: {e}")
+#                         continue
+# 
+#             # Now build portfolio with all currencies that have balances and prices
+#             for account in accounts:
+#                 currency = account['currency']
+#                 balance = account['available']
+# 
+#                 # Skip zero balances
+#                 if balance <= 0:
+#                     continue
+# 
+#                 if currency == 'USD':
+#                     value_usd = balance
+#                     price = 1.0
+#                 elif currency == 'USDC':
+#                     # USDC is a stablecoin pegged to $1 USD
+#                     value_usd = balance * 1.0
+#                     price = 1.0
+#                 elif f"{currency}-USD" in current_prices:
+#                     price = current_prices[f"{currency}-USD"]
+#                     value_usd = balance * price
+#                 else:
+#                     # Skip currencies without valid prices
+#                     continue
+# 
+#                 # Skip very small values
+#                 if value_usd < settings.MIN_PORTFOLIO_VALUE_DISPLAY:
+#                     continue
+# 
+#                 total_value_usd += value_usd
+# 
+#                 portfolio.append({
+#                     "currency": currency,
+#                     "balance": balance,
+#                     "price": price,
+#                     "value_usd": value_usd,
+#                     "percentage": 0.0  # Will be calculated after total
+#                 })
+# 
+#             # Sort portfolio by value (highest first) and calculate percentages
+#             portfolio.sort(key=lambda x: x["value_usd"], reverse=True)
+#             for item in portfolio:
+#                 item["percentage"] = (item["value_usd"] / total_value_usd * 100) if total_value_usd > 0 else 0
+# 
+#         # Convert to display currency
+#         total_value = currency_converter.convert_amount(total_value_usd, 'USD', display_currency)
+#         formatted_total = currency_converter.format_currency(total_value, display_currency)
+# 
+#         # Enhanced logging for portfolio debugging
+#         logger.info(f"Portfolio Debug - USD Total: ${total_value_usd:.2f}")
+#         gbp_rate = currency_converter.get_exchange_rate('USD', 'GBP')
+#         logger.info(f"Portfolio Debug - Exchange Rate: 1 USD = {gbp_rate:.4f} GBP")
+#         logger.info(f"Portfolio Debug - GBP Total: £{total_value:.2f}")
+#         asset_summary = [(item['currency'], f"${item.get('value_usd', 0):.2f}") for item in portfolio[:5]]
+#         logger.info(f"Portfolio Debug - Individual Assets: {asset_summary}")
+# 
+#         # Format current prices appropriately
+#         formatted_current_prices = {}
+#         for product_id, price in current_prices.items():
+#             base, quote = product_id.split('-')
+#             if quote in ['USD', 'GBP', 'EUR']:
+#                 formatted_current_prices[product_id] = currency_converter.format_currency(price, quote)
+#             else:
+#                 formatted_current_prices[product_id] = f"{price:.6f} {product_id}"
+# 
+#         # Get other status data (use same total_value_usd as individual breakdown)
+#         portfolio_data = {
+#             'portfolio_value': total_value,
+#             'daily_pnl': 0.0,  # Could calculate actual P&L later
+#             'risk_status': 'normal'
+#         }
+#         engine_status = trading_engine.get_status()
+#         model_status = ai_model.get_model_status()
+# 
+#         # Create standardized models_info for template
+#         def get_models_info_for_template(model_status):
+#             """Convert model status to template-friendly format."""
+#             models_trained_count = len(model_status.get('models_trained', []))
+#             
+#             # Helper to get model-specific info with defaults
+#             def get_model_info(model_prefix):
+#                 return {
+#                     'ready': model_status.get(f'{model_prefix}_model_ready', False),
+#                     'status': model_status.get(f'{model_prefix}_model_status', 'not_started'),
+#                     'accuracy': model_status.get(f'{model_prefix}_model_accuracy', 0),
+#                     'trained_on': model_status.get(f'{model_prefix}_model_trained_on', 'Not trained'),
+#                     'progress': model_status.get(f'{model_prefix}_model_progress', 0)
+#                 }
+#             
+#             return {
+#                 'models_trained': models_trained_count,
+#                 'btc_model_ready': model_status.get('btc_model_ready', False),
+#                 'btc_model_status': model_status.get('btc_model_status', 'not_started'),
+#                 'btc_model_accuracy': model_status.get('btc_model_accuracy', 0),
+#                 'btc_model_trained_on': model_status.get('btc_model_trained_on', 'Not trained'),
+#                 'btc_model_progress': model_status.get('btc_model_progress', 0),
+#                 'eth_model_ready': model_status.get('eth_model_ready', False),
+#                 'eth_model_status': model_status.get('eth_model_status', 'not_started'),
+#                 'eth_model_accuracy': model_status.get('eth_model_accuracy', 0),
+#                 'eth_model_trained_on': model_status.get('eth_model_trained_on', 'Not trained'),
+#                 'eth_model_progress': model_status.get('eth_model_progress', 0),
+#                 'alt_model_ready': model_status.get('alt_model_ready', False),
+#                 'alt_model_status': model_status.get('alt_model_status', 'not_started'),
+#                 'alt_model_accuracy': model_status.get('alt_model_accuracy', 0),
+#                 'alt_model_trained_on': model_status.get('alt_model_trained_on', 'Not trained'),
+#                 'alt_model_progress': model_status.get('alt_model_progress', 0)
+#             }
+# 
+#         # Get recent trades (last 10)
+#         recent_trades = db_manager.get_trades(limit=10)
+# 
+#         # Calculate summary stats
+#         total_trades = len(recent_trades) if recent_trades else 0
+#         winning_trades = sum(1 for trade in recent_trades if trade.get('pnl', 0) > 0) if recent_trades else 0
+#         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+# 
+#         # Get performance metrics
+#         perf_summary = db_manager.get_performance_summary(days=30)
+# 
+#         # Build market conditions for AI signals
+#         market_conditions = {}
+#         for product_id in settings.PRODUCT_IDS:  # All pairs for complete monitoring
+#             try:
+#                 signal = ai_model.get_signal(product_id)
+#                 price = current_prices.get(product_id, 0)
+#                 base, quote = product_id.split('-')
+#                 if quote in ['USD', 'GBP', 'EUR']:
+#                     formatted_price = currency_converter.format_currency(price, quote)
+#                 else:
+#                     formatted_price = f"{price:.6f} {product_id}"
+#                 market_conditions[product_id] = {
+#                     'product_id': product_id,
+#                     'signal': signal.get('action', 'HOLD'),
+#                     'confidence': signal.get('confidence', 0),
+#                     'reason': signal.get('reason', 'No signal available'),
+#                     'price': price,
+#                     'formatted_price': formatted_price,
+#                     'meets_threshold': signal.get('confidence', 0) >= settings.MODEL_CONFIDENCE_THRESHOLD,
+#                     'action': 'TRADE' if signal.get('confidence', 0) >= settings.MODEL_CONFIDENCE_THRESHOLD else 'WAIT'
+#                 }
+#             except Exception as e:
+#                 logger.error(f"Error getting signal for {product_id}: {e}")
+#                 price = current_prices.get(product_id, 0)
+#                 base, quote = product_id.split('-')
+#                 if quote in ['USD', 'GBP', 'EUR']:
+#                     formatted_price = currency_converter.format_currency(price, quote)
+#                 else:
+#                     formatted_price = f"{price:.6f} {product_id}"
+#                 market_conditions[product_id] = {
+#                     'product_id': product_id,
+#                     'signal': 'ERROR',
+#                     'confidence': 0,
+#                     'reason': str(e),
+#                     'price': price,
+#                     'formatted_price': formatted_price,
+#                     'meets_threshold': False,
+#                     'action': 'ERROR'
+#                 }
+# 
+#         # Format portfolio data with currency conversion
+# 
+#         # Format portfolio data with currency conversion
+#         converted_portfolio = []
+#         for item in portfolio:
+#             converted_item = item.copy()
+#             # Use value_usd if available (paper trading), otherwise value (live trading)
+#             item_value = item.get('value_usd', item.get('value', 0))
+#             converted_item['value'] = currency_converter.convert_amount(item_value, 'USD', display_currency)
+#             converted_item['formatted_value'] = currency_converter.format_currency(converted_item['value'], display_currency)
+#             # Balance should show actual amount, not converted value
+#             balance = item.get('balance', 0)
+#             converted_item['formatted_balance'] = f"{balance:.6f} {item['currency']}"
+#             converted_portfolio.append(converted_item)
+# 
+#         # Format other currency values
+#         formatted_total = currency_converter.format_currency(portfolio_data.get('portfolio_value', 0), display_currency)
+#         formatted_daily_pnl = currency_converter.format_currency(portfolio_data.get('daily_pnl', 0), display_currency)
+# 
+#         context = {
+#             "request": request,
+#             "portfolio": converted_portfolio,
+#             "portfolio_value": portfolio_data.get('portfolio_value', 0),
+#             "formatted_total": formatted_total,
+#             "display_currency": display_currency,
+#             "daily_pnl": portfolio_data.get('daily_pnl', 0),
+#             "formatted_daily_pnl": formatted_daily_pnl,
+#             "risk_status": portfolio_data.get('risk_status', 'unknown'),
+#             "paper_trading": engine_status.get('paper_trading', True),
+#             "active_positions": engine_status.get('active_positions', 0),
+#             "models_trained": len(model_status.get('models_trained', [])),
+#             "models_info": get_models_info_for_template(model_status),
+#             "current_prices": current_prices,
+#             "formatted_current_prices": formatted_current_prices,
+#             "recent_trades": recent_trades or [],
+#             "total_trades": total_trades,
+#             "win_rate": win_rate,
+#             "perf_summary": perf_summary,
+#             "trading_active": db_manager.get_trading_active(),
+#             "product_ids": settings.PRODUCT_IDS,
+#             "market_conditions": market_conditions,
+#             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+#             "gbp_balance_status": balance_manager.check_gbp_balance() if hasattr(balance_manager, 'check_gbp_balance') else {"gbp_balance": 0.0, "status": "Unknown"},
+#         }
+# 
+# 
+# 
+#         return templates.TemplateResponse("dashboard.html", context)
+# 
+#     except Exception as e:
+#         logger.error(f"Dashboard error: {e}")
+#         return templates.TemplateResponse("error.html", {"request": request, "error": str(e)})
 
-        # Get user's preferred display currency
-        display_currency = db_manager.get_user_setting('display_currency', 'USD') or 'USD'
 
-        # Check trading mode to determine data source
-        if trading_engine.paper_trading:
-            # Paper trading: show simulated portfolio
-            portfolio = [
-                {
-                    "currency": "USD",
-                    "balance": settings.PAPER_TRADING_PORTFOLIO_VALUE,
-                    "price": 1.0,
-                    "value_usd": settings.PAPER_TRADING_PORTFOLIO_VALUE,
-                    "percentage": 100.0
-                }
-            ]
-            total_value_usd = settings.PAPER_TRADING_PORTFOLIO_VALUE
-            current_prices = {}  # Not needed for paper trading
-        else:
-            # Live trading: show real Coinbase balances for ALL currencies with assets
-            accounts = coinbase_api.get_accounts()
-            current_prices = data_collector.get_current_prices()
-
-            portfolio = []
-            total_value_usd = 0.0
-
-            # Collect all currencies that need price data
-            currencies_needing_prices = set()
-
-            for account in accounts:
-                currency = account['currency']
-                balance = account['available']
-
-                # Skip zero balances
-                if balance <= 0:
-                    continue
-
-                # Only add currencies that need price lookups (not USD or USDC)
-                if currency not in ['USD', 'USDC']:
-                    currencies_needing_prices.add(currency)
-
-            # Fetch prices for all currencies found in wallet
-            for currency in currencies_needing_prices:
-                if currency != 'USD' and f"{currency}-USD" not in current_prices:
-                    try:
-                        ticker = coinbase_api.get_product_ticker(f"{currency}-USD")
-                        price = ticker.get('price')
-                        if price and price > 0:
-                            current_prices[f"{currency}-USD"] = price
-                    except Exception as e:
-                        logger.debug(f"Could not fetch price for {currency}-USD: {e}")
-                        continue
-
-            # Now build portfolio with all currencies that have balances and prices
-            for account in accounts:
-                currency = account['currency']
-                balance = account['available']
-
-                # Skip zero balances
-                if balance <= 0:
-                    continue
-
-                if currency == 'USD':
-                    value_usd = balance
-                    price = 1.0
-                elif currency == 'USDC':
-                    # USDC is a stablecoin pegged to $1 USD
-                    value_usd = balance * 1.0
-                    price = 1.0
-                elif f"{currency}-USD" in current_prices:
-                    price = current_prices[f"{currency}-USD"]
-                    value_usd = balance * price
-                else:
-                    # Skip currencies without valid prices
-                    continue
-
-                # Skip very small values
-                if value_usd < settings.MIN_PORTFOLIO_VALUE_DISPLAY:
-                    continue
-
-                total_value_usd += value_usd
-
-                portfolio.append({
-                    "currency": currency,
-                    "balance": balance,
-                    "price": price,
-                    "value_usd": value_usd,
-                    "percentage": 0.0  # Will be calculated after total
-                })
-
-            # Sort portfolio by value (highest first) and calculate percentages
-            portfolio.sort(key=lambda x: x["value_usd"], reverse=True)
-            for item in portfolio:
-                item["percentage"] = (item["value_usd"] / total_value_usd * 100) if total_value_usd > 0 else 0
-
-        # Convert to display currency
-        total_value = currency_converter.convert_amount(total_value_usd, 'USD', display_currency)
-        formatted_total = currency_converter.format_currency(total_value, display_currency)
-
-        # Enhanced logging for portfolio debugging
-        logger.info(f"Portfolio Debug - USD Total: ${total_value_usd:.2f}")
-        gbp_rate = currency_converter.get_exchange_rate('USD', 'GBP')
-        logger.info(f"Portfolio Debug - Exchange Rate: 1 USD = {gbp_rate:.4f} GBP")
-        logger.info(f"Portfolio Debug - GBP Total: £{total_value:.2f}")
-        asset_summary = [(item['currency'], f"${item.get('value_usd', 0):.2f}") for item in portfolio[:5]]
-        logger.info(f"Portfolio Debug - Individual Assets: {asset_summary}")
-
-        # Format current prices appropriately
-        formatted_current_prices = {}
-        for product_id, price in current_prices.items():
-            base, quote = product_id.split('-')
-            if quote in ['USD', 'GBP', 'EUR']:
-                formatted_current_prices[product_id] = currency_converter.format_currency(price, quote)
-            else:
-                formatted_current_prices[product_id] = f"{price:.6f} {product_id}"
-
-        # Get other status data (use same total_value_usd as individual breakdown)
-        portfolio_data = {
-            'portfolio_value': total_value,
-            'daily_pnl': 0.0,  # Could calculate actual P&L later
-            'risk_status': 'normal'
-        }
-        engine_status = trading_engine.get_status()
-        model_status = ai_model.get_model_status()
-
-        # Create standardized models_info for template
-        def get_models_info_for_template(model_status):
-            """Convert model status to template-friendly format."""
-            models_trained_count = len(model_status.get('models_trained', []))
-            
-            # Helper to get model-specific info with defaults
-            def get_model_info(model_prefix):
-                return {
-                    'ready': model_status.get(f'{model_prefix}_model_ready', False),
-                    'status': model_status.get(f'{model_prefix}_model_status', 'not_started'),
-                    'accuracy': model_status.get(f'{model_prefix}_model_accuracy', 0),
-                    'trained_on': model_status.get(f'{model_prefix}_model_trained_on', 'Not trained'),
-                    'progress': model_status.get(f'{model_prefix}_model_progress', 0)
-                }
-            
-            return {
-                'models_trained': models_trained_count,
-                'btc_model_ready': model_status.get('btc_model_ready', False),
-                'btc_model_status': model_status.get('btc_model_status', 'not_started'),
-                'btc_model_accuracy': model_status.get('btc_model_accuracy', 0),
-                'btc_model_trained_on': model_status.get('btc_model_trained_on', 'Not trained'),
-                'btc_model_progress': model_status.get('btc_model_progress', 0),
-                'eth_model_ready': model_status.get('eth_model_ready', False),
-                'eth_model_status': model_status.get('eth_model_status', 'not_started'),
-                'eth_model_accuracy': model_status.get('eth_model_accuracy', 0),
-                'eth_model_trained_on': model_status.get('eth_model_trained_on', 'Not trained'),
-                'eth_model_progress': model_status.get('eth_model_progress', 0),
-                'alt_model_ready': model_status.get('alt_model_ready', False),
-                'alt_model_status': model_status.get('alt_model_status', 'not_started'),
-                'alt_model_accuracy': model_status.get('alt_model_accuracy', 0),
-                'alt_model_trained_on': model_status.get('alt_model_trained_on', 'Not trained'),
-                'alt_model_progress': model_status.get('alt_model_progress', 0)
-            }
-
-        # Get recent trades (last 10)
-        recent_trades = db_manager.get_trades(limit=10)
-
-        # Calculate summary stats
-        total_trades = len(recent_trades) if recent_trades else 0
-        winning_trades = sum(1 for trade in recent_trades if trade.get('pnl', 0) > 0) if recent_trades else 0
-        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-
-        # Get performance metrics
-        perf_summary = db_manager.get_performance_summary(days=30)
-
-        # Build market conditions for AI signals
-        market_conditions = {}
-        for product_id in settings.PRODUCT_IDS:  # All pairs for complete monitoring
-            try:
-                signal = ai_model.get_signal(product_id)
-                price = current_prices.get(product_id, 0)
-                base, quote = product_id.split('-')
-                if quote in ['USD', 'GBP', 'EUR']:
-                    formatted_price = currency_converter.format_currency(price, quote)
-                else:
-                    formatted_price = f"{price:.6f} {product_id}"
-                market_conditions[product_id] = {
-                    'product_id': product_id,
-                    'signal': signal.get('action', 'HOLD'),
-                    'confidence': signal.get('confidence', 0),
-                    'reason': signal.get('reason', 'No signal available'),
-                    'price': price,
-                    'formatted_price': formatted_price,
-                    'meets_threshold': signal.get('confidence', 0) >= settings.MODEL_CONFIDENCE_THRESHOLD,
-                    'action': 'TRADE' if signal.get('confidence', 0) >= settings.MODEL_CONFIDENCE_THRESHOLD else 'WAIT'
-                }
-            except Exception as e:
-                logger.error(f"Error getting signal for {product_id}: {e}")
-                price = current_prices.get(product_id, 0)
-                base, quote = product_id.split('-')
-                if quote in ['USD', 'GBP', 'EUR']:
-                    formatted_price = currency_converter.format_currency(price, quote)
-                else:
-                    formatted_price = f"{price:.6f} {product_id}"
-                market_conditions[product_id] = {
-                    'product_id': product_id,
-                    'signal': 'ERROR',
-                    'confidence': 0,
-                    'reason': str(e),
-                    'price': price,
-                    'formatted_price': formatted_price,
-                    'meets_threshold': False,
-                    'action': 'ERROR'
-                }
-
-        # Format portfolio data with currency conversion
-
-        # Format portfolio data with currency conversion
-        converted_portfolio = []
-        for item in portfolio:
-            converted_item = item.copy()
-            # Use value_usd if available (paper trading), otherwise value (live trading)
-            item_value = item.get('value_usd', item.get('value', 0))
-            converted_item['value'] = currency_converter.convert_amount(item_value, 'USD', display_currency)
-            converted_item['formatted_value'] = currency_converter.format_currency(converted_item['value'], display_currency)
-            # Balance should show actual amount, not converted value
-            balance = item.get('balance', 0)
-            converted_item['formatted_balance'] = f"{balance:.6f} {item['currency']}"
-            converted_portfolio.append(converted_item)
-
-        # Format other currency values
-        formatted_total = currency_converter.format_currency(portfolio_data.get('portfolio_value', 0), display_currency)
-        formatted_daily_pnl = currency_converter.format_currency(portfolio_data.get('daily_pnl', 0), display_currency)
-
-        context = {
-            "request": request,
-            "portfolio": converted_portfolio,
-            "portfolio_value": portfolio_data.get('portfolio_value', 0),
-            "formatted_total": formatted_total,
-            "display_currency": display_currency,
-            "daily_pnl": portfolio_data.get('daily_pnl', 0),
-            "formatted_daily_pnl": formatted_daily_pnl,
-            "risk_status": portfolio_data.get('risk_status', 'unknown'),
-            "paper_trading": engine_status.get('paper_trading', True),
-            "active_positions": engine_status.get('active_positions', 0),
-            "models_trained": len(model_status.get('models_trained', [])),
-            "models_info": get_models_info_for_template(model_status),
-            "current_prices": current_prices,
-            "formatted_current_prices": formatted_current_prices,
-            "recent_trades": recent_trades or [],
-            "total_trades": total_trades,
-            "win_rate": win_rate,
-            "perf_summary": perf_summary,
-            "trading_active": db_manager.get_trading_active(),
-            "product_ids": settings.PRODUCT_IDS,
-            "market_conditions": market_conditions,
-            "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "gbp_balance_status": balance_manager.check_gbp_balance() if hasattr(balance_manager, 'check_gbp_balance') else {"gbp_balance": 0.0, "status": "Unknown"},
-        }
-
-
-
-        return templates.TemplateResponse("dashboard.html", context)
-
-    except Exception as e:
-        logger.error(f"Dashboard error: {e}")
-        return templates.TemplateResponse("error.html", {"request": request, "error": str(e)})
-
-
-@app.get("/trades", response_class=HTMLResponse)
-async def trades_page(request: Request, limit: int = 50):
+# Temporarily disabled to isolate recursion issue
+# @app.get("/trades", response_class=HTMLResponse)
+# async def trades_page(request: Request, limit: int = 50):
     """Trades history page."""
     try:
         trades = db_manager.get_trades(limit=limit)

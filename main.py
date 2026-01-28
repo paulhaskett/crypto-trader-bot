@@ -30,10 +30,11 @@ from src.ai_model import ai_model
 from src.risk_manager import risk_manager
 from src.trading_engine import trading_engine
 from src.balance_manager import balance_manager
+from src.currency_utils import currency_converter
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
+    level=getattr(logging, settings.LOG_LEVEL) or logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(settings.LOG_FILE),
@@ -63,7 +64,12 @@ class UnifiedBot:
         self.last_cycle_time = time.time()
         self.cycle_count = 0
 
+        # Initialize currency settings
+        self.base_currency = db_manager.get_user_setting('base_currency', settings.BASE_CURRENCY) or settings.BASE_CURRENCY
+        self.display_currency = db_manager.get_user_setting('display_currency', 'USD') or 'USD'
+
         logger.info(f"Unified Bot initialized - Trading active: {self.trading_active}")
+        logger.info(f"Currency settings - Base: {self.base_currency}, Display: {self.display_currency}")
         
         # Fix trading state consistency on startup
         if self.trading_active:
@@ -243,13 +249,31 @@ class UnifiedBot:
 
         logger.info("Trading loop stopped")
 
-    def get_status(self) -> dict:
+        def get_status(self) -> dict:
+            """Get current bot status for dashboard"""
+            portfolio_data = risk_manager.check_portfolio_risk()
+            engine_status = trading_engine.get_status()
+            model_status = ai_model.get_model_status()
+            
+            return {
+                "trading_active": self.trading_active,
+                "paper_trading": trading_engine.paper_trading,
+                "portfolio_value": portfolio_data.get('portfolio_value', 0),
+                "daily_pnl": portfolio_data.get('daily_pnl', 0),
+                "risk_status": portfolio_data.get('risk_status', 'normal'),
+                "active_positions": engine_status.get('active_positions', 0),
+                "models_trained": len(model_status.get('models_trained', [])),
+                "listeners_connected": len(self.status_listeners),
+            }
         """Get current bot status."""
         portfolio_data = risk_manager.check_portfolio_risk()
         engine_status = trading_engine.get_status()
 
         # Get model status from AI system (not trading engine)
         model_status = ai_model.get_model_status()
+
+        # Get current exchange rate for display
+        exchange_rate = currency_converter.get_exchange_rate('USD', self.display_currency) or 1.0
 
         return {
             "trading_active": self.trading_active,
@@ -259,8 +283,117 @@ class UnifiedBot:
             "risk_status": portfolio_data.get('risk_status', 'unknown'),
             "active_positions": engine_status.get('active_positions', 0),
             "models_trained": len(model_status.get('models_trained', [])),
-            "listeners_connected": len(self.status_listeners)
+            "listeners_connected": len(self.status_listeners),
+            "base_currency": self.base_currency,
+            "display_currency": self.display_currency,
+            "exchange_rate": exchange_rate
         }
+
+    def set_base_currency(self, currency: str) -> bool:
+        """Set the base currency for trading operations."""
+        if currency not in ['USD', 'GBP']:
+            logger.error(f"Invalid base currency: {currency}")
+            return False
+        
+        try:
+            self.base_currency = currency
+            success = db_manager.save_user_setting('base_currency', currency)
+            
+            if success:
+                logger.info(f"Base currency changed to: {currency}")
+                
+                # Update settings for product IDs based on currency
+                if currency == 'USD':
+                    settings.PRODUCT_IDS = [pid.replace('-GBP', '-USD') for pid in settings.PRODUCT_IDS]
+                elif currency == 'GBP':
+                    settings.PRODUCT_IDS = [pid.replace('-USD', '-GBP') for pid in settings.PRODUCT_IDS]
+                
+                # Broadcast currency change
+                self.broadcast_status({
+                    "type": "currency_change",
+                    "base_currency": currency,
+                    "display_currency": self.display_currency,
+                    "message": f"Base currency changed to {currency}"
+                })
+                
+                return True
+            else:
+                logger.error("Failed to save base currency to database")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error setting base currency: {e}")
+            return False
+
+    def set_display_currency(self, currency: str) -> bool:
+        """Set the display currency for the dashboard."""
+        if currency not in ['USD', 'GBP']:
+            logger.error(f"Invalid display currency: {currency}")
+            return False
+        
+        try:
+            self.display_currency = currency
+            success = db_manager.save_user_setting('display_currency', currency)
+            
+            if success:
+                await self.broadcast_status({
+                    "type": "currency_change",
+                    "base_currency": self.base_currency,
+                    "display_currency": currency
+                })
+                
+                # Update trading engine base currency
+                try:
+                    self.trading_engine.set_base_currency(self.base_currency)
+                    logger.info(f"Trading engine base currency updated to {self.base_currency}")
+                except Exception as e:
+                    logger.error(f"Failed to update trading engine base currency: {e}")
+                
+                # Update all ongoing USD conversion rates to new base currency
+                for usd_pair in settings.PRODUCT_IDS:
+                    if '-GBP' not in usd_pair and usd_pair.replace('-', '') in settings.PRODUCT_IDS:
+                        gbp_pair = f"{usd_pair.replace('-', '')}"
+                        try:
+                            rate = await coinbase_api.get_product_ticker('GBP-USD')
+                            if rate and 'price' in rate:
+                                await self.save_setting(f"{gbp_pair}_exchange_rate", float(rate['price']))
+                                logger.info(f"Updated {gbp_pair} exchange rate: {float(rate['price'])}")
+                        except Exception as e:
+                            logger.error(f"Failed to update {gbp_pair} exchange rate: {e}")
+                
+                return True
+            else:
+                logger.error("Failed to save display currency to database")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error setting display currency: {e}")
+            return False
+
+    def get_currency_info(self) -> dict:
+        """Get current currency configuration and exchange rates."""
+        try:
+            # Get exchange rates
+            usd_to_gbp = currency_converter.get_exchange_rate('USD', 'GBP') or 0.80
+            gbp_to_usd = currency_converter.get_exchange_rate('GBP', 'USD') or 1.25
+            
+            return {
+                "base_currency": self.base_currency,
+                "display_currency": self.display_currency,
+                "exchange_rates": {
+                    "usd_to_gbp": usd_to_gbp,
+                    "gbp_to_usd": gbp_to_usd
+                },
+                "supported_currencies": list(currency_converter.CURRENCY_SYMBOLS.keys()),
+                "trading_pairs": settings.PRODUCT_IDS
+            }
+        except Exception as e:
+            logger.error(f"Error getting currency info: {e}")
+            return {
+                "base_currency": self.base_currency,
+                "display_currency": self.display_currency,
+                "error": str(e)
+            }
 
     def shutdown(self):
         """Shutdown the unified bot."""
@@ -499,14 +632,26 @@ def run_unified_dashboard():
     """Run both dashboard and trading engine together."""
     logger.info("run_unified_dashboard() called")
     import uvicorn
-    from src.dashboard import app
-    from fastapi import Request
+    from fastapi import FastAPI, Request
     from fastapi.templating import Jinja2Templates
     from fastapi.responses import HTMLResponse
+    from fastapi.staticfiles import StaticFiles
     logger.info("Imports completed successfully")
     from pathlib import Path
 
-    # Override the dashboard route to use unified bot status
+    # Create FastAPI app for unified dashboard
+    app = FastAPI(
+        title="Crypto Trading Bot",
+        description="Unified Trading Bot Dashboard",
+        version="1.0.0"
+    )
+    
+    # Mount static files
+    static_dir = Path(__file__).parent / "src" / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    
+    # Dashboard route removed - using main.py dashboard function
     templates_dir = Path(__file__).parent / "src" / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
 
@@ -514,7 +659,6 @@ def run_unified_dashboard():
     async def dashboard():
         """Main dashboard page showing overview of bot status."""
 
-        print("DEBUG: Dashboard function called")
         try:
             # Add cache-busting timestamp to force refresh
             import time
@@ -524,8 +668,9 @@ def run_unified_dashboard():
             # Get portfolio data with currency conversion
             from src.currency_utils import currency_converter
 
-            # Get user's preferred display currency
-            display_currency = db_manager.get_user_setting('display_currency', 'USD') or 'USD'
+            # Get user's preferred display currency from unified bot
+            display_currency = unified_bot.display_currency
+            base_currency = unified_bot.base_currency
 
             # Check trading mode to determine data source
             if trading_engine.paper_trading:
@@ -586,17 +731,19 @@ def run_unified_dashboard():
                         # Skip GBP-USD requests - use exchange rate from dashboard instead
                         if currency == 'GBP':
                             # Get GBP-USD rate from existing exchange rate (USD->GBP inverted)
-                            try:
-                                portfolio_response = await risk_manager.check_portfolio_risk()
-                                if 'exchange_rate' in portfolio_response:
-                                    usd_to_gbp_rate = portfolio_response['exchange_rate'].get('usd_to_display', 0)
-                                    if usd_to_gbp_rate > 0:
-                                        gbp_to_usd_rate = 1 / usd_to_gbp_rate
-                                        current_prices["GBP-USD"] = gbp_to_usd_rate
-                                        logger.debug(f"Using inverted exchange rate for GBP-USD: {gbp_to_usd_rate}")
-                                        continue
-                            except Exception as e:
-                                logger.debug(f"Could not get exchange rate for GBP: {e}")
+                            # TODO: Temporarily commented out to isolate recursion issue
+                            pass
+                            # try:
+                            #     portfolio_response = await risk_manager.check_portfolio_risk()
+                            #     if 'exchange_rate' in portfolio_response:
+                            #         usd_to_gbp_rate = portfolio_response['exchange_rate'].get('usd_to_display', 0)
+                            #         if usd_to_gbp_rate > 0:
+                            #             gbp_to_usd_rate = 1 / usd_to_gbp_rate
+                            #             current_prices["GBP-USD"] = gbp_to_usd_rate
+                            #             logger.debug(f"Using inverted exchange rate for GBP-USD: {gbp_to_usd_rate}")
+                            #             continue
+                            # except Exception as e:
+                            #     logger.debug(f"Could not get exchange rate for GBP: {e}")
                         
                         # For other currencies, try USD pairs
                         try:
@@ -702,25 +849,59 @@ def run_unified_dashboard():
             successful_trades = sum(1 for trade in recent_trades if trade.get('pnl', 0) > 0) if recent_trades else 0
             recent_win_rate = (successful_trades / len(recent_trades) * 100) if recent_trades else 0
 
-            # Get current market conditions and AI signals
+# Get current market conditions and AI signals
             market_conditions = {}
             trading_signals = {}
+            display_market_conditions = {}  # For display currency with direct data
 
-            # Set defaults first
-            for product_id in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'LTC-USD']:
+            # Use pairs based on base currency (no conversion needed for base currency)
+            if base_currency == 'GBP':
+                base_pairs = ['BTC-GBP', 'ETH-GBP', 'SOL-GBP', 'LTC-GBP', 'DOT-GBP', 'ADA-GBP', 'LINK-GBP', 'UNI-GBP']
+                display_pairs = base_pairs
+            else:
+                base_pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'LTC-USD', 'DOT-USD', 'ADA-USD', 'LINK-USD', 'UNI-USD']
+                display_pairs = base_pairs
+
+            for product_id in base_pairs:
                 market_conditions[product_id] = {'price': 0.0, 'signal': 'HOLD', 'confidence': 0, 'action': 'WAIT'}
 
-            # Try to get real data
+            # Try to get real data (fallback to conversion if needed)
+            exchange_rate = currency_converter.get_exchange_rate('USD', 'GBP') or 1.30  # Default fallback rate
             try:
-                for product_id in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'LTC-USD']:
-                    # Get current price
+                gbp_ticker = coinbase_api.get_product_ticker('GBP-USD')
+                if gbp_ticker and 'price' in gbp_ticker:
+                    exchange_rate = float(gbp_ticker['price'])
+            except:
+                pass  # Keep default rate
+
+            # Try to get real data for base currency pairs
+            try:
+                for product_id in base_pairs:
+                    # Try base pair first
                     try:
                         ticker = coinbase_api.get_product_ticker(product_id)
                         if ticker and 'price' in ticker:
                             price = float(ticker['price'])
                             market_conditions[product_id]['price'] = price
                     except:
-                        pass  # Keep default price
+                        # Fallback to other currency with conversion
+                        if base_currency == 'GBP':
+                            usd_product_id = product_id.replace('-GBP', '-USD')
+                        else:
+                            gbp_product_id = product_id.replace('-USD', '-GBP')
+                            usd_product_id = gbp_product_id
+                        
+                        try:
+                            usd_ticker = coinbase_api.get_product_ticker(usd_product_id)
+                            if usd_ticker and 'price' in usd_ticker:
+                                usd_price = float(usd_ticker['price'])
+                                if base_currency == 'GBP':
+                                    price = usd_price / exchange_rate
+                                else:
+                                    price = usd_price * exchange_rate
+                                market_conditions[product_id]['price'] = price
+                        except:
+                            pass  # Keep default price
 
                     # Get AI signal
                     try:
@@ -729,7 +910,7 @@ def run_unified_dashboard():
                             confidence = signal_data.get('confidence', 0) * 100  # Convert to percentage
                             action = signal_data.get('action', 'HOLD')
                             meets_threshold = confidence >= 60.0
-
+                            
                             market_conditions[product_id].update({
                                 'signal': action,
                                 'confidence': confidence,
@@ -743,13 +924,75 @@ def run_unified_dashboard():
                 # Keep defaults
                 pass
 
+            # Extract crypto balances from current portfolio for signal integration
+            crypto_balances = {}
+            for item in converted_portfolio:
+                crypto_symbol = item.get('currency', '').upper()
+                if crypto_symbol:  # Skip GBP/USD base currencies
+                    crypto_balance_gbp = item.get('gbp_value', 0.0)
+                    crypto_quantity = item.get('balance', 0.0)
+                    
+                    crypto_balances[crypto_symbol] = {
+                        'balance_gbp': crypto_balance_gbp,
+                        'balance_quantity': crypto_quantity,
+                        'formatted_balance': f"£{crypto_balance_gbp:,.2f}",
+                        'formatted_quantity': f"{crypto_quantity:.6f}" if crypto_quantity > 0.001 else "0.000000",
+                        'balance_percentage': (crypto_balance_gbp / total_value * 100) if total_value > 0 else 0
+                    }
+
+            # Convert data to display currency format
+            for base_product_id, base_data in market_conditions.items():
+                if display_currency == 'GBP' and base_currency == 'USD':
+                    display_product_id = base_product_id.replace('-USD', '-GBP')
+                    base_price = base_data.get('price', 0.0)
+                    display_price = base_price / exchange_rate if exchange_rate > 0 else 0.0
+                    currency_symbol = '£'
+                elif display_currency == 'USD' and base_currency == 'GBP':
+                    display_product_id = base_product_id.replace('-GBP', '-USD')
+                    base_price = base_data.get('price', 0.0)
+                    display_price = base_price * exchange_rate if exchange_rate > 0 else 0.0
+                    currency_symbol = '$'
+                else:
+                    # Same currency, no conversion needed
+                    display_product_id = base_product_id
+                    display_price = base_data.get('price', 0.0)
+                    currency_symbol = '£' if display_currency == 'GBP' else '$'
+                
+                crypto_symbol = display_product_id.split('-')[0]  # BTC, ETH, SOL, etc.
+                
+                # Add crypto balance data to market conditions
+                crypto_balance = crypto_balances.get(crypto_symbol, {})
+                has_balance = crypto_balance.get('balance_gbp', 0.0) > 0.01  # Minimum significant balance
+                
+                # Determine if we used conversion fallback
+                used_conversion_fallback = base_product_id != display_product_id
+                
+                display_market_conditions[display_product_id] = {
+                    'price': display_price,
+                    'formatted_price': f"{currency_symbol}{display_price:,.2f}",
+                    'signal': base_data.get('signal', 'HOLD'),
+                    'confidence': base_data.get('confidence', 0),
+                    'meets_threshold': base_data.get('meets_threshold', False),
+                    'action': base_data.get('action', 'WAIT'),
+                    'original_pair': base_product_id,
+                    'exchange_rate': exchange_rate,
+                    'crypto_balance': crypto_balance,
+                    'has_balance': has_balance,
+                    'balance_percentage': crypto_balance.get('balance_percentage', 0),
+                    'used_conversion_fallback': used_conversion_fallback
+                }
+
             trading_active = db_manager.get_trading_active()
 
+            # Get exchange rate info
+            exchange_rate_info = unified_bot.get_currency_info()
+            
             context = {
                 "portfolio": converted_portfolio,
                 "portfolio_value": total_value,
                 "formatted_total": formatted_total,
                 "display_currency": display_currency,
+                "base_currency": base_currency,
                 "daily_pnl": risk_data.get('daily_pnl', 0),
                 "formatted_daily_pnl": formatted_daily_pnl,
                 "risk_status": risk_data.get('risk_status', 'unknown'),
@@ -766,8 +1009,35 @@ def run_unified_dashboard():
                 "recent_win_rate": recent_win_rate,
                 "total_pnl": total_pnl,
                 "formatted_total_pnl": formatted_total_pnl,
-                "market_conditions": market_conditions,
+                "market_conditions": display_market_conditions,
                 "perf_summary": perf_summary,
+                "currency_info": exchange_rate_info,
+                
+                # Create models_info for template compatibility
+                "models_info": {
+                    'models_trained_count': len(model_status.get('models_trained', [])),
+                    'btc_model_ready': model_status.get('btc_model_ready', False),
+                    'btc_model_accuracy': model_status.get('btc_model_accuracy', 0),
+                    'btc_model_status': model_status.get('btc_model_status', 'not_started'),
+                    'btc_model_trained_on': model_status.get('btc_model_trained_on', 'Not trained'),
+                    'btc_model_progress': model_status.get('btc_model_progress', 0),
+                    'eth_model_ready': model_status.get('eth_model_ready', False),
+                    'eth_model_accuracy': model_status.get('eth_model_accuracy', 0),
+                    'eth_model_status': model_status.get('eth_model_status', 'not_started'),
+                    'eth_model_trained_on': model_status.get('eth_model_trained_on', 'Not trained'),
+                    'eth_model_progress': model_status.get('eth_model_progress', 0),
+                    'alt_model_ready': model_status.get('alt_model_ready', False),
+                    'alt_model_accuracy': model_status.get('alt_model_accuracy', 0),
+                    'alt_model_status': model_status.get('alt_model_status', 'not_started'),
+                    'alt_model_trained_on': model_status.get('alt_model_trained_on', 'Not trained'),
+                    'alt_model_progress': model_status.get('alt_model_progress', 0)
+                },
+                
+                "gbp_balance_status": balance_manager.check_gbp_balance() if hasattr(balance_manager, 'check_gbp_balance') else {"gbp_balance": 0.0, "status": "Unknown"},
+                
+                # Add product_ids for template (base currency pairs)
+                "product_ids": base_pairs,
+                
                 "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
 
@@ -983,8 +1253,8 @@ def run_unified_dashboard():
             if currency not in ['USD', 'GBP']:
                 return {"status": "error", "message": "Invalid currency. Must be USD or GBP"}
 
-            # Save user setting
-            success = db_manager.save_user_setting('display_currency', currency)
+            # Use unified bot to set display currency
+            success = unified_bot.set_display_currency(currency)
             if success:
                 return {"status": "success", "message": f"Display currency set to {currency}"}
             else:
@@ -993,6 +1263,70 @@ def run_unified_dashboard():
         except Exception as e:
             logger.error(f"Display currency error: {e}")
             return {"status": "error", "message": str(e)}
+
+    @app.post("/api/settings/base_currency")
+    async def set_base_currency(request: Request):
+        """Set user's preferred base currency for trading."""
+        try:
+            data = await request.json()
+            currency = data.get('value', 'GBP').upper()
+
+            # Validate currency
+            if currency not in ['USD', 'GBP']:
+                return {"status": "error", "message": "Invalid currency. Must be USD or GBP"}
+
+            # Use unified bot to set base currency
+            success = unified_bot.set_base_currency(currency)
+            if success:
+                return {
+                    "status": "success", 
+                    "message": f"Base currency set to {currency}",
+                    "base_currency": currency,
+                    "trading_pairs": settings.PRODUCT_IDS
+                }
+            else:
+                return {"status": "error", "message": "Failed to save base currency preference"}
+
+        except Exception as e:
+            logger.error(f"Base currency error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @app.get("/api/currency/info")
+    async def get_currency_info():
+        """Get current currency configuration and exchange rates."""
+        try:
+            return unified_bot.get_currency_info()
+        except Exception as e:
+            logger.error(f"Currency info error: {e}")
+            return {"status": "error", "message": str(e)}
+
+
+
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page():
+        """Settings page for currency management and bot configuration."""
+        try:
+            # Get current currency configuration
+            currency_info = unified_bot.get_currency_info()
+            
+            # Get other settings
+            display_currency = unified_bot.display_currency
+            base_currency = unified_bot.base_currency
+            
+            context = {
+                "display_currency": display_currency,
+                "base_currency": base_currency,
+                "currency_info": currency_info,
+                "paper_trading": trading_engine.paper_trading,
+                "trading_active": unified_bot.trading_active,
+                "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            return templates.TemplateResponse("settings.html", {"request": {"type": "http"}, **context})
+            
+        except Exception as e:
+            logger.error(f"Settings page error: {e}")
+            return HTMLResponse(content=f"<h1>Error: {str(e)}</h1>")
 
     @app.post("/api/trades/clear")
     async def clear_trades():

@@ -25,11 +25,11 @@ services:
       start_period: 40s
     # Security: Run as non-root user
     user: "1000:1000"
-    # Resource limits for Raspberry Pi
+    # Resource limits for Raspberry Pi (with memory cgroup support)
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 1.5G
         reservations:
           memory: 512M
 

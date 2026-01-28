@@ -834,17 +834,21 @@ class CoinbaseAPI:
                 # Use official SDK methods
                 if side.lower() == 'buy':
                     logger.info(f"[DEBUG] Using SDK market_order_buy...")
+                    # Format size as decimal string for SDK compatibility
+                    formatted_size = f"{size:.6f}"
                     order = self.sdk_client.market_order_buy(
                         client_order_id=client_order_id,
                         product_id=product_id,
-                        base_size=str(size)
+                        base_size=formatted_size
                     )
                 else:  # sell
                     logger.info(f"[DEBUG] Using SDK market_order_sell...")
+                    # Format size as decimal string for SDK compatibility
+                    formatted_size = f"{size:.6f}"
                     order = self.sdk_client.market_order_sell(
                         client_order_id=client_order_id,
                         product_id=product_id,
-                        base_size=str(size)
+                        base_size=formatted_size
                     )
 
                 logger.info(f"[DEBUG] SDK order response type: {type(order)}")
