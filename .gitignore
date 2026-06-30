@@ -1,20 +1,14 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[codab]$a
-*.pyd
-.Python[build]/
+*.py[cod]
+*$py.class
 *.so
-
-# Distribution / packaging
-.Python[build]/
-build/
-dist/
 *.egg
 *.egg-info/
 
-# PyInstaller
-*.manifest
-*.spec
+# Distribution / packaging
+build/
+dist/
 
 # Installer logs
 pip-log.txt
@@ -47,14 +41,17 @@ config/api_keys.env
 # Model Files (TOO LARGE FOR GIT)
 models/*.pkl
 models/*.scaler
+models_backup/
 models/
 
-# Data Files (LARGE, CAN BE EXCLUDED)
+# Data Files (LARGE - DB files should never be committed)
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.sqlite
 data/logs/
 
-# Logs (CAN BE EXCLUDED)
+# Logs
 logs/*.log
 logs/trades/*.log
 
@@ -64,6 +61,7 @@ logs/trades/*.log
 *.swp
 *.swo
 *~
+.*.sw?
 
 # OS generated files
 .DS_Store
@@ -91,8 +89,3 @@ temp/
 
 # Session files
 session-*.md
-
-# GitHub specific
-.github/
-!.github/
-!git/
