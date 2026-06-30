@@ -139,6 +139,29 @@
             </div>
         </div>
 
+        <!-- System Resources Row -->
+        <div class="row mb-3">
+            <div class="col-md-3">
+                <div class="card metric-card border-secondary h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-microchip card-icon text-secondary mb-2"></i>
+                        <h6 class="text-muted">Memory</h6>
+                        <h3 class="text-secondary" id="card-memory">Loading...</h3>
+                        <small class="text-muted" id="card-memory-limit"></small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metric-card border-secondary h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-tachometer-alt card-icon text-secondary mb-2"></i>
+                        <h6 class="text-muted">Load Avg</h6>
+                        <h3 class="text-secondary" id="card-load-avg">Loading...</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Key Metrics Row 2 -->
         <div class="row mb-3">
             <div class="col-md-2">
@@ -328,7 +351,7 @@
             gbpBalance: '/api/gbp-balance'
         };
 
-        const INTERVALS = { summary: 30000, signals: 60000, positions: 30000, countdown: 5000, gbp: 30000 };
+        const INTERVALS = { summary: 30000, signals: 60000, positions: 30000, countdown: 5000, gbp: 30000, resources: 30000 };
         let state = { tradingActive: false, currency: 'GBP' };
         let tradesLoaded = false;
 
@@ -639,8 +662,29 @@
             }
         }
 
+        async function updateResources() {
+            const d = await fetchJSON('/api/resources');
+            if (!d) return;
+
+            const memEl = document.getElementById('card-memory');
+            const memLimitEl = document.getElementById('card-memory-limit');
+            const loadEl = document.getElementById('card-load-avg');
+
+            if (d.memory_mb != null) {
+                memEl.textContent = `${d.memory_mb} MB`;
+            } else {
+                memEl.textContent = '--';
+            }
+            if (d.memory_limit_mb != null) {
+                memLimitEl.textContent = `/ ${d.memory_limit_mb} MB`;
+            }
+            if (d.load_avg_1m != null) {
+                loadEl.textContent = d.load_avg_1m.toFixed(2);
+            }
+        }
+
         async function init() {
-            await Promise.all([updateStatus(), updateSummary(), updateSignals(), updatePositions(), updateGbpBalance(), updateCountdown()]);
+            await Promise.all([updateStatus(), updateSummary(), updateSignals(), updatePositions(), updateGbpBalance(), updateCountdown(), updateResources()]);
             document.getElementById('loading-overlay').style.display = 'none';
         }
 
@@ -659,6 +703,7 @@
             setInterval(updatePositions, INTERVALS.positions);
             setInterval(updateCountdown, INTERVALS.countdown);
             setInterval(updateGbpBalance, INTERVALS.gbp);
+            setInterval(updateResources, INTERVALS.resources);
         });
     </script>
 </body>

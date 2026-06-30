@@ -248,9 +248,9 @@ class MultiSourcePricer:
         """
         prices = {}
         
-        # 0. Try WebSocket first for high-liquidity pairs (BTC, ETH) - per slippage-modeling.md
-        # WebSocket provides real-time prices with minimal latency
-        ws_pairs = ['BTC-GBP', 'ETH-GBP', 'BTC-USD', 'ETH-USD']
+        # 0. Try WebSocket first for active pairs - per slippage-modeling.md
+        # WebSocket provides real-time prices with minimal latency.
+        ws_pairs = getattr(self.websocket, 'active_pairs', []) if self.websocket else []
         if product_id in ws_pairs:
             try:
                 ws_price = self._get_websocket_price(product_id)
@@ -324,8 +324,8 @@ class MultiSourcePricer:
         
         Per slippage-modeling.md: prioritize high-liquidity pairs with WebSocket.
         """
-        # High-liquidity pairs that benefit from WebSocket
-        ws_pairs = ['BTC-GBP', 'ETH-GBP', 'BTC-USD', 'ETH-USD']
+        # Active pairs that benefit from WebSocket (dynamically loaded from settings)
+        ws_pairs = getattr(self.websocket, 'active_pairs', []) if self.websocket else []
         
         if product_id not in ws_pairs:
             return None

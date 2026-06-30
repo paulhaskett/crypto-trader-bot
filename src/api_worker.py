@@ -2454,6 +2454,54 @@ async def health_check():
         "timestamp": datetime.now().isoformat()
     }
 
+@app.get("/api/resources")
+async def resource_stats():
+    """Container resource usage from cgroups."""
+    memory_mb = None
+    memory_limit_mb = None
+    cpu_percent = None
+    load_avg = None
+    try:
+        # Memory current (cgroup v2)
+        mem_path = "/sys/fs/cgroup/memory.current"
+        if Path(mem_path).exists():
+            with open(mem_path) as f:
+                memory_bytes = int(f.read().strip())
+                memory_mb = round(memory_bytes / (1024 * 1024), 1)
+        # Memory limit (cgroup v2)
+        mem_max_path = "/sys/fs/cgroup/memory.max"
+        if Path(mem_max_path).exists():
+            with open(mem_max_path) as f:
+                val = f.read().strip()
+                if val not in ("max", "inf"):
+                    memory_limit_mb = round(int(val) / (1024 * 1024), 1)
+        elif Path("/sys/fs/cgroup/memory.limit_in_bytes").exists():
+            with open("/sys/fs/cgroup/memory.limit_in_bytes") as f:
+                memory_limit_mb = round(int(f.read().strip()) / (1024 * 1024), 1)
+        # CPU load average
+        with open("/proc/loadavg") as f:
+            parts = f.read().strip().split()
+            load_avg = float(parts[0])
+        # CPU usage from cpu.stat (cgroup v2)
+        cpu_usage_path = "/sys/fs/cgroup/cpu.stat"
+        if Path(cpu_usage_path).exists():
+            usage_total = 0
+            with open(cpu_usage_path) as f:
+                for line in f:
+                    if line.startswith("usage_usec ") or line.startswith("usage "):
+                        usage_total += int(line.split()[1])
+            # approximate since last read: simple snapshot
+            cpu_percent = None
+    except Exception as e:
+        logger.debug(f"Resource stats error: {e}")
+
+    return {
+        "memory_mb": memory_mb,
+        "memory_limit_mb": memory_limit_mb,
+        "load_avg_1m": load_avg,
+        "cpu_percent": cpu_percent,
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

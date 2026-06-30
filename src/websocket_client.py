@@ -54,6 +54,10 @@ class CoinbaseWebSocketClient:
         # Message callback for price updates
         self._on_price_update = None
         
+        # Load active trading pairs from settings
+        from config.settings import settings
+        self.active_pairs: list[str] = list(getattr(settings, 'PRODUCT_IDS', []))
+        
     def start(self, on_price_update=None):
         """
         Start WebSocket connection in background thread.
@@ -95,9 +99,8 @@ class CoinbaseWebSocketClient:
             self._connected = True
             logger.info("WebSocket connected")
             
-            # Subscribe to ticker channel for high-liquidity pairs
-            # Use USD pairs as fallback since GBP might not have ticker
-            product_ids = self.WEBSOCKET_PAIRS_USD + ['ETH-USD']
+            # Subscribe to ticker channel for all active trading pairs
+            product_ids = self.active_pairs or ['BTC-GBP', 'ETH-GBP']
             
             self._ws_client.subscribe(
                 product_ids=product_ids,
@@ -178,7 +181,7 @@ class CoinbaseWebSocketClient:
     def get_price(self, product_id: str) -> Optional[float]:
         """
         Get latest price for a product.
-        
+
         Args:
             product_id: e.g., 'BTC-GBP', 'BTC-USD'
             
@@ -186,17 +189,7 @@ class CoinbaseWebSocketClient:
             Latest price or None if not available
         """
         with self._prices_lock:
-            # Try direct match first
-            if product_id in self._prices:
-                return self._prices[product_id]
-            
-            # Try USD equivalent for GBP pairs
-            if product_id == 'BTC-GBP' and 'BTC-USD' in self._prices:
-                return self._prices.get('BTC-USD')
-            if product_id == 'ETH-GBP' and 'ETH-USD' in self._prices:
-                return self._prices.get('ETH-USD')
-            
-            return None
+            return self._prices.get(product_id)
     
     def is_connected(self) -> bool:
         """Check if WebSocket is connected."""

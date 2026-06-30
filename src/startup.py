@@ -8,6 +8,7 @@ import sys
 import time
 import signal
 import subprocess
+import importlib
 from pathlib import Path
 
 # Import from centralized cache_manager
@@ -24,13 +25,42 @@ class BotStarter:
     def __init__(self):
         self.trading_process = None
         self.gunicorn_process = None
-        
+
+    def run_migrations(self):
+        """Run database migrations from migrations/ directory, once only."""
+        import fcntl
+        migrations_dir = BASE_DIR / 'migrations'
+        lock_path = BASE_DIR / 'data' / '.migrations_lock'
+        if not migrations_dir.exists():
+            return
+        # Acquire advisory file lock so only one worker runs migrations
+        with open(lock_path, 'w') as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return  # Another worker is running migrations
+            for py in sorted(migrations_dir.glob('*.py')):
+                if py.name.startswith('_'):
+                    continue
+                mod_name = f"migrations.{py.stem}"
+                try:
+                    mod = importlib.import_module(mod_name)
+                    fn = getattr(mod, py.stem, None)
+                    if callable(fn):
+                        fn()
+                    else:
+                        # fallback: run module if callable not found
+                        if hasattr(mod, 'migrate'):
+                            mod.migrate()
+                except Exception as e:
+                    print(f"Migration skipped ({mod_name}): {e}", flush=True)
+
     def start_trading(self):
         """Start the trading loop in a subprocess."""
         print("=" * 60, flush=True)
         print("STARTING TRADING PROCESS", flush=True)
         print("=" * 60, flush=True)
-        
+
         self.trading_process = subprocess.Popen(
             [sys.executable, 'src/trading_loop.py'],
             stdout=subprocess.PIPE,
@@ -39,23 +69,23 @@ class BotStarter:
             text=True
         )
         print(f"Trading process started (PID: {self.trading_process.pid})", flush=True)
-        
+
         def read_output():
             try:
                 for line in self.trading_process.stdout:
                     print(f"[TRADING] {line}", end='', flush=True)
             except:
                 pass
-        
+
         import threading
         threading.Thread(target=read_output, daemon=True).start()
-    
+
     def start_api_workers(self):
         """Start gunicorn with multiple workers."""
         print("=" * 60, flush=True)
         print(f"STARTING API WORKERS ({NUM_WORKERS} workers)", flush=True)
         print("=" * 60, flush=True)
-        
+
         gunicorn_cmd = [
             'gunicorn',
             'src.api_worker:app',
@@ -67,7 +97,7 @@ class BotStarter:
             '--timeout', '1800',
             '--keep-alive', '5'
         ]
-        
+
         self.gunicorn_process = subprocess.Popen(
             gunicorn_cmd,
             stdout=subprocess.PIPE,
@@ -76,23 +106,23 @@ class BotStarter:
             text=True
         )
         print(f"API workers started (PID: {self.gunicorn_process.pid})", flush=True)
-        
+
         def read_output():
             try:
                 for line in self.gunicorn_process.stdout:
                     print(f"[API] {line}", end='', flush=True)
             except:
                 pass
-        
+
         import threading
         threading.Thread(target=read_output, daemon=True).start()
-    
+
     def wait_for_api_ready(self, timeout=API_READY_TIMEOUT):
         """Wait for API to be ready."""
         import urllib.request
         start = time.time()
         print(f"Waiting for API workers to be ready (timeout: {timeout}s)...", flush=True)
-        
+
         while time.time() - start < timeout:
             try:
                 urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)
@@ -101,10 +131,10 @@ class BotStarter:
                 return True
             except Exception as e:
                 time.sleep(1)
-        
+
         print("WARNING: API may not be ready", flush=True)
         return False
-    
+
     def check_process_health(self):
         """Check if processes are still healthy."""
         if self.trading_process and self.trading_process.poll() is not None:
@@ -112,17 +142,19 @@ class BotStarter:
         if self.gunicorn_process and self.gunicorn_process.poll() is not None:
             return False, "Gunicorn died"
         return True, "OK"
-    
+
     def run(self):
         """Start both components and wait."""
+        self.run_migrations()
+
         self.start_trading()
-        
+
         time.sleep(3)
-        
+
         self.start_api_workers()
-        
+
         self.wait_for_api_ready()
-        
+
         print("\n" + "=" * 60, flush=True)
         print("CRYPTO TRADING BOT STARTED", flush=True)
         print("=" * 60, flush=True)
@@ -130,15 +162,15 @@ class BotStarter:
         print(f"  API: {NUM_WORKERS} workers on port 8000", flush=True)
         print(f"  Dashboard: http://localhost:8000", flush=True)
         print("=" * 60 + "\n", flush=True)
-        
+
         def signal_handler(sig, frame):
             print("\nShutdown signal received...", flush=True)
             self.shutdown()
             sys.exit(0)
-        
+
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-        
+
         try:
             while True:
                 healthy, status = self.check_process_health()
@@ -150,11 +182,11 @@ class BotStarter:
             pass
         finally:
             self.shutdown()
-    
+
     def shutdown(self):
         """Stop all processes."""
         print("Stopping processes...", flush=True)
-        
+
         if self.trading_process:
             self.trading_process.terminate()
             try:
@@ -162,7 +194,7 @@ class BotStarter:
             except subprocess.TimeoutExpired:
                 self.trading_process.kill()
                 self.trading_process.wait()
-        
+
         if self.gunicorn_process:
             self.gunicorn_process.terminate()
             try:
@@ -170,7 +202,7 @@ class BotStarter:
             except subprocess.TimeoutExpired:
                 self.gunicorn_process.kill()
                 self.gunicorn_process.wait()
-        
+
         print("All processes stopped", flush=True)
 
 

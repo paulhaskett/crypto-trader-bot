@@ -18,10 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire application
 COPY . .
 
-# Run database migrations before starting the app
-RUN python migrations/add_scale_out_columns.py
-RUN python migrations/add_scale_in_levels.py
-
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
 USER app
