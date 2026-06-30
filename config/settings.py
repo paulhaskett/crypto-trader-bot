@@ -300,7 +300,7 @@ class Settings:
     DATABASE_URL: str = 'sqlite:///data/trades.db'
 
     # Logging
-    LOG_LEVEL: str = 'DEBUG'
+    LOG_LEVEL: str = 'INFO'
     LOG_FILE: str = 'logs/trading_bot.log'
     
     # Prediction Logging

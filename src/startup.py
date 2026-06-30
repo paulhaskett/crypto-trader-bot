@@ -16,7 +16,7 @@ from src.cache_manager import BASE_DIR
 os.chdir(BASE_DIR)
 sys.path.insert(0, str(BASE_DIR))
 
-NUM_WORKERS = int(os.getenv('NUM_WORKERS', '3'))
+NUM_WORKERS = int(os.getenv('NUM_WORKERS', '2'))
 API_READY_TIMEOUT = 30
 
 

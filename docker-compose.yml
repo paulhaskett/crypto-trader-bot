@@ -34,6 +34,7 @@ services:
       resources:
         limits:
           memory: 1.5G
+          cpus: 2
         reservations:
           memory: 512M
 
