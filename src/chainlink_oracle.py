@@ -123,44 +123,41 @@ class ChainlinkOracle:
     def _fetch_from_alternative(self, feed_name: str) -> Optional[Dict]:
         """
         Fetch price from alternative source for verification.
-        
+
         Since direct Chainlink smart contract access requires Web3,
-        we use CryptoCompare as an alternative for verification.
+        we use CoinGecko as an alternative for verification.
         """
-        # Map to CryptoCompare symbol
+        # Map to CoinGecko coin ID
         symbol_map = {
-            'BTC/USD': 'BTC',
-            'ETH/USD': 'ETH',
-            'BTC/GBP': 'BTC',
-            'ETH/GBP': 'ETH',
+            'BTC/USD': 'bitcoin',
+            'ETH/USD': 'ethereum',
+            'BTC/GBP': 'bitcoin',
+            'ETH/GBP': 'ethereum',
         }
-        
-        symbol = symbol_map.get(feed_name)
-        if not symbol:
+
+        coin_id = symbol_map.get(feed_name)
+        if not coin_id:
             return None
-            
-        # Use CryptoCompare for cross-verification (free, no key)
+
+        # Use CoinGecko for cross-verification (free, no key required)
         try:
-            url = "https://min-api.cryptocompare.com/data/pricemulti"
-            params = {
-                'fsyms': symbol,
-                'tsyms': 'USD,GBP',
-            }
-            
-            data = self._request(url, params)
-            
-            if data and symbol in data:
-                prices = data[symbol]
+            from src.coingecko_api import get_coingecko_api
+            coingecko = get_coingecko_api()
+
+            vs_currency = 'gbp' if 'GBP' in feed_name else 'usd'
+            price_data = coingecko.get_price(coin_id, vs_currency)
+
+            if price_data and price_data.get('price'):
                 return {
-                    'price_usd': prices.get('USD'),
-                    'price_gbp': prices.get('GBP'),
-                    'source': 'cryptocompare',
+                    'price_usd': price_data.get('price') if vs_currency == 'usd' else None,
+                    'price_gbp': price_data.get('price') if vs_currency == 'gbp' else None,
+                    'source': 'coingecko',
                     'timestamp': time.time(),
                 }
-                
+
         except Exception as e:
-            logger.debug(f"Alternative verification failed: {e}")
-        
+            logger.debug(f"CoinGecko verification failed for {feed_name}: {e}")
+
         return None
     
     def verify_price(self, product_id: str, price: float, source: str, tolerance: float = 0.05) -> Dict:

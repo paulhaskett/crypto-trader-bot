@@ -1,18 +1,17 @@
 """
-CryptoCompare API wrapper for aggregated market data.
+CryptoCompare API wrapper — backed by CoinGecko (free, no API key).
 
-This module provides access to CryptoCompare's free crypto market data API,
-which aggregates prices from 100+ exchanges globally.
+This module provides the same interface as the original CryptoCompare wrapper
+but uses CoinGecko's free API under the hood, since CryptoCompare/CoinDesk
+now requires a paid API key for all endpoints.
 
-API Documentation: https://www.cryptocompare.com/api
-Free Tier: No API key required for basic usage
-Rate Limit: ~100-200 calls/day (free), higher with key
+API Documentation: https://www.coingecko.com/en/api
+Free Tier: 10-30 calls/minute (no API key required)
 """
 
 import logging
 import time
 from typing import Dict, List, Any, Optional
-from datetime import datetime
 
 import requests
 
@@ -26,14 +25,28 @@ class CryptoCompareAPIError(Exception):
 
 class CryptoCompareAPI:
     """
-    CryptoCompare API client for aggregated market data.
-    
-    Provides price data from 100+ exchanges, good alternative to CoinGecko.
+    CryptoCompare-style API client backed by CoinGecko.
+
+    Provides price data from 100+ exchanges, offering better global
+    price discovery than single-exchange APIs.
     """
-    
-    BASE_URL = "https://min-api.cryptocompare.com/data"
-    
-    # CryptoCompare ID mapping
+
+    # CoinGecko base URL
+    BASE_URL = "https://api.coingecko.com/api/v3"
+
+    # Symbol -> CoinGecko ID mapping
+    SYMBOL_TO_COINGECKO = {
+        'BTC': 'bitcoin',
+        'ETH': 'ethereum',
+        'SOL': 'solana',
+        'LTC': 'litecoin',
+        'DOT': 'polkadot',
+        'ADA': 'cardano',
+        'LINK': 'chainlink',
+        'UNI': 'uniswap',
+    }
+
+    # Original CryptoCompare product mapping (kept for backwards compat)
     COINBASE_TO_CRYPTOCOMPARE = {
         'BTC-GBP': 'BTC',
         'ETH-GBP': 'ETH',
@@ -44,146 +57,187 @@ class CryptoCompareAPI:
         'LINK-GBP': 'LINK',
         'UNI-GBP': 'UNI',
     }
-    
+
     def __init__(self, api_key: Optional[str] = None):
         """
-        Initialize CryptoCompare API client.
-        
+        Initialize CoinGecko-backed price client.
+
         Args:
-            api_key: Optional API key for higher rate limits
+            api_key: Ignored (CoinGecko free tier doesn't require a key).
+                      Accepted for backwards compatibility.
         """
-        import os
-        self.api_key = api_key or os.getenv('CRYPTOCOMPARE_API_KEY')
+        self.api_key = api_key
         self.session = requests.Session()
-        
+
+        # Rate limiting - free tier: 10-30/min
         self._last_request_time = 0
-        self._min_request_interval = 0.6  # ~100 calls/minute safe limit
-        
+        self._min_request_interval = 2.5  # Safe for free tier
+
+        # Cache
+        self._price_cache: Dict[str, Any] = {}
+        self._cache_ttl = 30  # seconds
+
     def _rate_limit(self):
-        """Apply rate limiting."""
+        """Apply rate limiting between requests."""
         elapsed = time.time() - self._last_request_time
         if elapsed < self._min_request_interval:
             time.sleep(self._min_request_interval - elapsed)
         self._last_request_time = time.time()
-    
+
     def _request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
-        """Make request to CryptoCompare API."""
+        """Make request to CoinGecko API with rate limiting."""
         self._rate_limit()
-        
+
         url = f"{self.BASE_URL}{endpoint}"
-        params = params or {}
-        
+        headers = {'Accept': 'application/json'}
+
         if self.api_key:
-            params['api_key'] = self.api_key
-        
+            headers['x-cg-demo-api-key'] = self.api_key
+
         try:
-            response = self.session.get(url, params=params, timeout=30)
+            response = self.session.get(url, params=params, headers=headers, timeout=15)
             response.raise_for_status()
-            data = response.json()
-            
-            if data.get('Response') == 'Error':
-                raise CryptoCompareAPIError(data.get('Message', 'Unknown error'))
-            
-            return data
-            
+            return response.json()
+
         except requests.exceptions.RequestException as e:
+            # Check if it's a rate limit (429)
+            if isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 429:
+                raise CryptoCompareAPIError("Rate limit exceeded")
             raise CryptoCompareAPIError(f"Request failed: {e}")
-    
+
+    def _symbol_to_coingecko(self, symbol: str) -> Optional[str]:
+        """Convert a crypto symbol (BTC, ETH) to CoinGecko ID (bitcoin, ethereum)."""
+        return self.SYMBOL_TO_COINGECKO.get(symbol.upper())
+
     def get_price(self, symbol: str, currency: str = 'GBP') -> Optional[float]:
         """
         Get price for a single cryptocurrency.
-        
+
         Args:
-            symbol: Crypto symbol (e.g., 'BTC')
+            symbol: Crypto symbol (e.g., 'BTC', 'ETH')
             currency: Target currency (default: 'GBP')
-            
+
         Returns:
             Price as float or None
         """
+        coin_id = self._symbol_to_coingecko(symbol)
+        if not coin_id:
+            logger.warning(f"No CoinGecko mapping for symbol: {symbol}")
+            return None
+
+        cache_key = f"{coin_id}_{currency.lower()}"
+        if cache_key in self._price_cache:
+            cached_time, cached_price = self._price_cache[cache_key]
+            if (time.time() - cached_time) < self._cache_ttl:
+                return cached_price
+
         try:
             params = {
-                'fsym': symbol.upper(),
-                'tsyms': currency.upper(),
+                'ids': coin_id,
+                'vs_currencies': currency.lower(),
             }
-            
-            data = self._request('/price', params)
-            
-            if currency.upper() in data:
-                return float(data[currency.upper()])
-                
+
+            data = self._request('/simple/price', params)
+
+            if coin_id in data and currency.lower() in data[coin_id]:
+                price = float(data[coin_id][currency.lower()])
+                self._price_cache[cache_key] = (time.time(), price)
+                return price
+
         except CryptoCompareAPIError as e:
-            logger.warning(f"CryptoCompare price fetch failed for {symbol}: {e}")
-            
+            logger.warning(f"CoinGecko price fetch failed for {symbol}: {e}")
+
         return None
-    
+
     def get_prices_batch(self, symbols: List[str], currencies: List[str] = None) -> Dict:
         """
         Get prices for multiple cryptocurrencies efficiently.
-        
+
         Args:
-            symbols: List of crypto symbols
+            symbols: List of crypto symbols (e.g., ['BTC', 'ETH'])
             currencies: Target currencies (default: ['GBP', 'USD'])
-            
+
         Returns:
             Dict mapping symbol to price data
         """
         if currencies is None:
             currencies = ['GBP', 'USD']
-            
+
+        # Convert symbols to CoinGecko IDs
+        coin_ids = []
+        valid_symbols = []
+        for sym in symbols:
+            cid = self._symbol_to_coingecko(sym)
+            if cid:
+                coin_ids.append(cid)
+                valid_symbols.append(sym)
+
+        if not coin_ids:
+            return {}
+
         try:
             params = {
-                'fsyms': ','.join([s.upper() for s in symbols]),
-                'tsyms': ','.join([c.upper() for c in currencies]),
+                'ids': ','.join(coin_ids),
+                'vs_currencies': ','.join(c.lower() for c in currencies),
             }
-            
-            data = self._request('/pricemulti', params)
-            
-            # Convert to structured format
+
+            data = self._request('/simple/price', params)
+
+            # Convert back to symbol-based result
             result = {}
-            for symbol, currency_data in data.items():
-                if isinstance(currency_data, dict):
-                    result[symbol] = {
-                        'price': currency_data.get('GBP'),
-                        'price_usd': currency_data.get('USD'),
+            for sym, cid in zip(valid_symbols, coin_ids):
+                if cid in data:
+                    coin_data = data[cid]
+                    entry = {
+                        'price': coin_data.get(currencies[0].lower()),
                     }
-                
+                    if len(currencies) > 1:
+                        entry['price_usd'] = coin_data.get(currencies[1].lower())
+                    result[sym] = entry
+
             return result
-            
+
         except CryptoCompareAPIError as e:
-            logger.warning(f"CryptoCompare batch fetch failed: {e}")
+            logger.warning(f"CoinGecko batch price fetch failed: {e}")
             return {}
-    
+
     def get_ohlc(self, symbol: str, currency: str = 'GBP', limit: int = 168) -> Optional[List]:
         """
-        Get OHLC data.
-        
+        Get OHLC data via CoinGecko.
+
         Args:
-            symbol: Crypto symbol
-            currency: Target currency
-            limit: Number of data points (max ~168 for hourly)
-            
+            symbol: Crypto symbol (e.g., 'BTC', 'ETH')
+            currency: Target currency (default: 'GBP')
+            limit: Number of hourly data points (max ~168)
+
         Returns:
-            List of OHLC data
+            List of [timestamp, open, high, low, close] arrays or None
         """
+        coin_id = self._symbol_to_coingecko(symbol)
+        if not coin_id:
+            return None
+
+        # CoinGecko OHLC is in days, not hours. Map limit to approximate days.
+        days = max(1, min(limit // 24 + 1, 90))
+
         try:
             params = {
-                'fsym': symbol.upper(),
-                'tsym': currency.upper(),
-                'limit': min(limit, 168),
+                'vs_currency': currency.lower(),
+                'days': days,
             }
-            
-            data = self._request('/v2/histohour', params)
-            
-            if 'Data' in data and 'Data' in data['Data']:
-                return data['Data']['Data']
-                
+
+            data = self._request(f'/coins/{coin_id}/ohlc', params)
+
+            if data and isinstance(data, list):
+                return data
+
         except CryptoCompareAPIError as e:
-            logger.warning(f"CryptoCompare OHLC fetch failed for {symbol}: {e}")
-            
+            logger.warning(f"CoinGecko OHLC fetch failed for {symbol}: {e}")
+
         return None
-    
+
     def convert_product_to_symbol(self, product_id: str) -> Optional[str]:
-        """Convert Coinbase product ID to CryptoCompare symbol."""
+        """Convert Coinbase product ID to crypto symbol (e.g., 'BTC-GBP' -> 'BTC')."""
         return self.COINBASE_TO_CRYPTOCOMPARE.get(product_id)
 
 

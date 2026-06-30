@@ -7,9 +7,13 @@ services:
     ports:
       - "8000:8000"  # Dashboard web interface
     volumes:
-      - ./data:/app/data          # Persistent database and logs
-      - ./models:/app/models      # Trained AI models
-      - ./config:/app/config      # Configuration files (read-only for security)
+      # IMPORTANT: Use host-absolute paths — /projects inside this container
+      # maps to /home/pi/Projects on the Pi host where Docker daemon runs.
+      # Relative paths like ./data resolve inside Hermes' filesystem which
+      # doesn't match the Docker host's view.
+      - /home/pi/Projects/crypto-trader-bot/data:/app/data
+      - /home/pi/Projects/crypto-trader-bot/models:/app/models
+      - /home/pi/Projects/crypto-trader-bot/config:/app/config
     environment:
       - PYTHONPATH=/app
       # Proxy configuration for HTTPS requests (commented out for now)
