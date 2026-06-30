@@ -18,11 +18,11 @@ services:
       # - NO_PROXY=localhost,127.0.0.1,crypto-trader-bot
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/status')"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/status', timeout=30)"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 3
-      start_period: 40s
+      start_period: 60s
     # Security: Run as non-root user
     user: "1000:1000"
     # Resource limits for Raspberry Pi (with memory cgroup support)

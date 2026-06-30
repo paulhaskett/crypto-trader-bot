@@ -6,142 +6,652 @@
     <title>AI Models - Crypto Trading Bot</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bs-success: #198754;
+            --bs-danger: #dc3545;
+            --bs-warning: #ffc107;
+        }
+        body { background-color: #f8f9fa; min-height: 100vh; }
+        .metric-card { border-radius: 10px; transition: transform 0.2s; }
+        .metric-card:hover { transform: translateY(-2px); }
+        .model-card { border-radius: 10px; transition: transform 0.2s; }
+        .model-card:hover { transform: translateY(-2px); }
+        .card-icon { font-size: 2rem; opacity: 0.8; }
+        .pnl-positive { color: var(--bs-success); }
+        .pnl-negative { color: var(--bs-danger); }
+        .signal-buy { border-left: 4px solid var(--bs-success); }
+        .signal-sell { border-left: 4px solid var(--bs-danger); }
+        .signal-hold { border-left: 4px solid #6c757d; }
+        .loading-spinner {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 200px;
+        }
+    </style>
 </head>
-<body class="bg-light">
-    <!-- Navigation -->
+<body>
+    <div class="toast-container" id="toast-container"></div>
+
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-        <div class="container">
-            <a class="navbar-brand" href="/">
-                <i class="fas fa-robot"></i> Crypto Trading Bot
-            </a>
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/"><i class="fas fa-robot me-2"></i>Crypto Trading Bot</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="/">
-                            <i class="fas fa-tachometer-alt"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/trades">
-                            <i class="fas fa-exchange-alt"></i> Trades
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/performance">
-                            <i class="fas fa-chart-line"></i> Performance
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link active" href="/models">
-                            <i class="fas fa-brain"></i> AI Models
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/settings">
-                            <i class="fas fa-cogs"></i> Settings
-                        </a>
-                    </li>
+                    <li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-tachometer-alt me-1"></i>Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/trades"><i class="fas fa-exchange-alt me-1"></i>Trades</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/performance"><i class="fas fa-chart-line me-1"></i>Performance</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/models"><i class="fas fa-brain me-1"></i>AI Models</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cogs me-1"></i>Settings</a></li>
                 </ul>
             </div>
         </div>
     </nav>
 
-    <div class="container mt-4">
+    <div class="container-fluid py-4">
         <div class="row mb-4">
-            <div class="col-md-12">
-                <h2><i class="fas fa-brain"></i> AI Models Status</h2>
+            <div class="col-md-8">
+                <h2><i class="fas fa-brain me-2"></i>AI Models Status</h2>
+            </div>
+            <div class="col-md-4 text-end">
+                <button class="btn btn-warning me-1" onclick="generateSignals()">
+                    <i class="fas fa-bolt me-1"></i>Generate Signals
+                </button>
+                <button class="btn btn-success me-1" id="retrainModels" onclick="retrainModels()">
+                    <i class="fas fa-sync me-1"></i>Retrain Models
+                </button>
+                <button class="btn btn-primary" onclick="loadModelsData()">
+                    <i class="fas fa-sync me-1"></i>Refresh
+                </button>
             </div>
         </div>
 
-        <!-- Model Overview -->
-        <div class="row mb-4">
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body text-center">
-                        <h5 class="card-title">Models Trained</h5>
-                        <h2 class="text-primary">{{ models_trained }}</h2>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body text-center">
-                        <h5 class="card-title">Features Used</h5>
-                        <h2 class="text-info">{{ features_count }}</h2>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body text-center">
-                        <h5 class="card-title">Model Type</h5>
-                        <h4 class="text-success">Random Forest</h4>
-                    </div>
-                </div>
+        <div id="loadingState" class="loading-spinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
             </div>
         </div>
 
-        <!-- Individual Model Status -->
-        {% if models_info %}
-        <div class="row">
-            <div class="col-md-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h5>Model Details</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Product</th>
-                                        <th>Status</th>
-                                        <th>Signal</th>
-                                        <th>Confidence</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for model in models_info %}
-                                    <tr>
-                                        <td><strong>{{ model.product_id }}</strong></td>
-                                        <td>
-                                            <span class="badge bg-{{ 'success' if model.trained else 'warning' }}">
-                                                {{ 'Trained' if model.trained else 'Not Trained' }}
-                                            </span>
-                                        </td>
-                                        <td>
-                                            {% if model.signal != 'N/A' %}
-                                                <span class="badge bg-{{ 'success' if model.signal == 'BUY' else 'danger' if model.signal == 'SELL' else 'secondary' }}">
-                                                    {{ model.signal }}
-                                                </span>
-                                            {% else %}
-                                                <span class="text-muted">-</span>
-                                            {% endif %}
-                                        </td>
-                                        <td>
-                                            {% if model.confidence > 0 %}
-                                                <div class="progress" style="width: 100px;">
-                                                    <div class="progress-bar bg-{{ 'success' if model.confidence >= 0.75 else 'warning' if model.confidence >= 0.5 else 'danger' }}"
-                                                         style="width: {{ (model.confidence * 100)|int }}%">
-                                                        {{ "%.0f"|format(model.confidence * 100) }}%
-                                                    </div>
-                                                </div>
-                                            {% else %}
-                                                <span class="text-muted">-</span>
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
+        <div id="errorState" class="alert alert-danger" style="display: none;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span id="errorMessage">Failed to load models data</span>
+        </div>
+
+        <div id="overviewCards" style="display: none;">
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <div class="alert alert-info d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="fas fa-clock me-2"></i>
+                            <strong>Last Updated:</strong> <span id="lastUpdated">-</span>
+                        </div>
+                        <div>
+                            <span class="badge bg-secondary me-2" id="retrainStatus">Auto: Enabled</span>
+                            <span class="badge bg-info" id="daysSinceRetrain">Last retrain: - days ago</span>
                         </div>
                     </div>
                 </div>
             </div>
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card metric-card border-primary h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-brain card-icon text-primary mb-2"></i>
+                            <h6 class="text-muted">Models Trained</h6>
+                            <h2 class="text-primary" id="modelsTrained">-</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card metric-card border-info h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-chart-bar card-icon text-info mb-2"></i>
+                            <h6 class="text-muted">Features Used</h6>
+                            <h2 class="text-info" id="featuresCount">-</h2>
+                        </div>
+                    </div>
+                </div>
+<div class="col-md-3">
+                     <div class="card metric-card h-100">
+                         <div class="card-body text-center">
+                             <i class="fas fa-cubes card-icon mb-2"></i>
+                             <h6 class="text-muted">Model Type</h6>
+                             <h4 class="text-success">4-Model Ensemble</h4>
+                             <small class="text-muted" id="modelTypeText">Loading ensemble...</small>
+                         </div>
+                     </div>
+                 </div>
+<div class="col-md-3">
+                     <div class="card metric-card h-100">
+                         <div class="card-body text-center">
+                             <i class="fas fa-weights card-icon mb-2"></i>
+                             <h6 class="text-muted">Ensemble Weights</h6>
+                             <div class="small text-start" id="weightsContainer">
+                                 <div class="text-muted">Loading weights...</div>
+                             </div>
+                             <small class="text-muted" id="weightsInfo">Mode: performance-based</small>
+                             <div class="mt-2 small text-break" id="weightsDebug" style="font-size:10px;max-width:200px;word-wrap:break-word;"></div>
+                         </div>
+                     </div>
+                 </div>
+            </div>
+
+            <div class="card model-card mb-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-robot me-2"></i>Trading Signals</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row" id="signalsGrid">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card model-card">
+                <div class="card-header">
+                    <h5><i class="fas fa-table me-2"></i>Model Details</h5>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Product</th>
+                                <th>Trained</th>
+                                <th>Signal</th>
+                                <th>Agree</th>
+                                <th>Regime</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modelsTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Trading Metrics Table -->
+            <div class="card model-card mt-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-chart-line me-2"></i>Trading Metrics (Best ATR Config)</h5>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Product</th>
+                                <th>Model</th>
+                                <th>Win Rate</th>
+                                <th>Profit Factor</th>
+                                <th>Total P&L</th>
+                                <th>Trades</th>
+                                <th>ATR Config</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradingMetricsBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Model Agreement Matrix -->
+            <div class="card model-card mt-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-th me-2"></i>Model Agreement Matrix</h5>
+                    <small class="text-muted ms-2">Individual model signals for each product</small>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Product</th>
+                                <th>Signal</th>
+                                <th>RF</th>
+                                <th>LR</th>
+                                <th>MLP</th>
+                                <th>GB</th>
+                                <th>Ridge</th>
+                                <th>Agreement</th>
+                            </tr>
+                        </thead>
+                        <tbody id="agreementMatrixBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-        {% endif %}
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const API = {
+            models: '/api/models/status',
+            status: '/api/status',
+            retrain: '/api/models/retrain',
+            generateSignals: '/api/models/generate_signals',
+            retrainProgress: '/api/models/retrain_progress'
+        };
+        
+        let pollInterval = null;
+
+        async function fetchJSON(url) {
+            try {
+                const r = await fetch(url);
+                return r.ok ? await r.json() : null;
+            } catch {
+                return null;
+            }
+        }
+
+        function showToast(msg, type = 'info') {
+            const c = document.getElementById('toast-container');
+            const id = 't' + Date.now();
+            c.innerHTML += `<div class="toast" id="${id}"><div class="toast-body">${msg}</div></div>`;
+            new bootstrap.Toast(document.getElementById(id)).show();
+        }
+
+        async function loadModelsData() {
+            const loadingState = document.getElementById('loadingState');
+            const overviewCards = document.getElementById('overviewCards');
+            const errorState = document.getElementById('errorState');
+            
+            loadingState.style.display = 'flex';
+            overviewCards.style.display = 'none';
+            errorState.style.display = 'none';
+            
+            try {
+                const data = await fetchJSON(API.models);
+                
+                if (!data) {
+                    throw new Error('Failed to fetch models data');
+                }
+
+                const modelsArray = Array.isArray(data.models) ? data.models : Object.values(data.models || {});
+                const modelsTrained = modelsArray.filter(m => m.trained).length;
+                const totalProducts = modelsArray.length || 8;
+                
+                document.getElementById('modelsTrained').textContent = `${modelsTrained}/${totalProducts}`;
+                document.getElementById('featuresCount').textContent = data.features_count || '-';
+
+                const signalsGrid = document.getElementById('signalsGrid');
+                signalsGrid.innerHTML = '';
+
+                const tbody = document.getElementById('modelsTableBody');
+                tbody.innerHTML = '';
+
+                modelsArray.forEach(model => {
+                    const productId = model.product_id;
+                    const signalClass = model.signal === 'BUY' ? 'signal-buy' : 
+                                       model.signal === 'SELL' ? 'signal-sell' : 'signal-hold';
+                    const signalBadge = model.signal === 'BUY' ? 'bg-success' : 
+                                       model.signal === 'SELL' ? 'bg-danger' : 'bg-secondary';
+                    const confidencePct = (model.confidence !== undefined && model.confidence !== null) ? Math.round(model.confidence * 100) : 0;
+                    const confidenceClass = confidencePct >= 70 ? 'bg-success' : 
+                                          confidencePct >= 50 ? 'bg-warning' : 'bg-danger';
+                    const regimeBadge = model.regime === 'bullish' ? 'bg-success' : 
+                                       model.regime === 'bearish' ? 'bg-danger' : 'bg-secondary';
+                    
+                    // Get trading metrics (use RF as representative)
+                    const winRate = (model.rf_win_rate || 0) * 100;
+                    const accuracy = (model.accuracy || 0) * 100;
+                    const accuracyClass = accuracy >= 50 ? 'bg-success' : accuracy >= 40 ? 'bg-warning' : 'bg-danger';
+                    const pf = model.rf_profit_factor || 0;
+                    const pnl = model.rf_total_pnl || 0;
+                    const winRateClass = winRate >= 50 ? 'bg-success' : winRate >= 40 ? 'bg-warning' : 'bg-danger';
+                    
+                    signalsGrid.innerHTML += `
+                        <div class="col-md-3 mb-3">
+                            <div class="card model-card ${signalClass} h-100">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <strong>${productId}</strong>
+                                        <span class="badge ${signalBadge}">${model.signal || 'N/A'}</span>
+                                    </div>
+                                    <div class="mb-2">
+                                        <small class="text-muted">Win Rate</small>
+                                        <div class="progress" style="height: 15px;">
+                                            <div class="progress-bar ${winRateClass}" 
+                                                 style="width: ${Math.min(winRate, 100)}%">
+                                                ${winRate.toFixed(1)}%
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <small class="text-muted">Accuracy</small>
+                                        <div class="progress" style="height: 15px;">
+                                            <div class="progress-bar ${accuracyClass}" 
+                                                 style="width: ${Math.min(accuracy, 100)}%">
+                                                ${accuracy.toFixed(1)}%
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <small class="text-muted">Confidence</small>
+                                        <div class="progress" style="height: 20px;">
+                                            <div class="progress-bar ${confidenceClass}" 
+                                                 style="width: ${confidencePct}%">
+                                                ${confidencePct}%
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <small class="text-muted">Regime:</small>
+                                        <span class="badge ${regimeBadge} ms-1">${model.regime || 'unknown'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                    const modelAccuracy = Math.round((model.accuracy || 0) * 100);
+                    
+                    const formatMetric = (value) => {
+                        if (!value || value === 0) return '-';
+                        return (value * 100).toFixed(1) + '%';
+                    };
+                    
+                    // Get trading metrics for table
+                    const rfWinRate = (model.rf_win_rate || 0) * 100;
+                    const rfWinRateClass = rfWinRate >= 50 ? 'text-success' : rfWinRate >= 40 ? 'text-warning' : 'text-danger';
+                    
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><strong>${productId}</strong></td>
+                            <td>
+                                <span class="badge ${model.trained ? 'bg-success' : 'bg-warning'}">
+                                    ${model.trained ? 'Trained' : 'Not Trained'}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge ${signalBadge}">${model.signal || 'N/A'}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${model.unanimous ? 'bg-success' : model.agreement >= 0.66 ? 'bg-warning' : 'bg-secondary'}">
+                                    ${Math.round((model.agreement || 0) * 100)}%
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge ${regimeBadge}">${model.regime || 'unknown'}</span>
+                            </td>
+                            <td>
+                                ${model.signal !== 'HOLD' && model.trained ? 
+                                    `<span class="badge bg-primary">TRADE</span>` : '-'}
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                // Populate Ensemble Weights Card
+                const weightsContainer = document.getElementById('weightsContainer');
+                const weightsInfo = document.getElementById('weightsInfo');
+                
+                // Simple fallback since API data isn't populating
+                const hasData = (modelsArray && modelsArray.length > 0 && modelsArray[0].rf_win_rate > 0);
+                
+                let rfW=25, lrW=25, mlpW=25, gbW=25, maxRf=0, maxLr=0, maxMlp=0, maxGb=0, modelCount=0;
+                
+                if (hasData) {
+                    modelCount = modelsArray.length;
+                    modelsArray.forEach(m => {
+                        maxRf = Math.max(maxRf, m.rf_win_rate || 0);
+                        maxLr = Math.max(maxLr, m.lr_win_rate || 0);
+                        maxMlp = Math.max(maxMlp, m.mlp_win_rate || 0);
+                        maxGb = Math.max(maxGb, m.gb_win_rate || 0);
+                    });
+                    
+                    // Calculate weights if we have varied win rates
+                    const total = maxRf + maxLr + maxMlp + maxGb;
+                    if (total > 0.2) {
+                        rfW = Math.round(maxRf / total * 100) || 25;
+                        lrW = Math.round(maxLr / total * 100) || 25;
+                        mlpW = Math.round(maxMlp / total * 100) || 25;
+                        gbW = Math.round(maxGb / total * 100) || 25;
+                    }
+                }
+                
+                weightsContainer.innerHTML = `
+                    <div><span class="badge bg-primary">RF</span> ${rfW}% <span class="text-success">(${ (maxRf*100).toFixed(0) }%)</span></div>
+                    <div><span class="badge bg-info">LR</span> ${lrW}% <span class="text-success">(${ (maxLr*100).toFixed(0) }%)</span></div>
+                    <div><span class="badge bg-warning">MLP</span> ${mlpW}% <span class="text-success">(${ (maxMlp*100).toFixed(0) }%)</span></div>
+                    <div><span class="badge bg-success">GB</span> ${gbW}% <span class="text-success">(${ (maxGb*100).toFixed(0) }%)</span></div>
+                `;
+                
+                weightsInfo.textContent = hasData ? `Based on ${modelCount} models | ${new Date().toLocaleTimeString()}` : 'Using equal weights';
+                
+                // Populate Model Type card with dynamic ensemble description
+                const modelTypeText = document.getElementById('modelTypeText');
+                if (modelTypeText) {
+                    const ensembleStr = `RF ${rfW}% + LR ${lrW}% + MLP ${mlpW}% + GB ${gbW}%`;
+                    modelTypeText.textContent = hasData ? ensembleStr : 'Performance-based weights';
+                }
+                
+                console.log('Ensemble weights populated:', {rf: rfW, lr: lrW, mlp: mlpW, gb: gbW});
+
+                // Populate Trading Metrics Table
+                const metricsBody = document.getElementById('tradingMetricsBody');
+                const modelTypes = [
+                    { key: 'rf', name: 'RF' },
+                    { key: 'lr', name: 'LR' },
+                    { key: 'mlp', name: 'MLP' },
+                    { key: 'gb', name: 'GB' },
+                    { key: 'ridge', name: 'Ridge' }
+                ];
+                
+                modelsArray.forEach(model => {
+                    const atr = model.atr_config || {};
+                    const atrStr = `mult=${atr.mult || '-'}, min=${atr.min || '-'}`;
+                    
+                    modelTypes.forEach(mt => {
+                        const winRate = model[`${mt.key}_win_rate`] || 0;
+                        const pf = model[`${mt.key}_profit_factor`] || 0;
+                        const pnl = model[`${mt.key}_total_pnl`] || 0;
+                        const trades = model[`${mt.key}_num_trades`] || 0;
+                        
+                        const winRateClass = winRate >= 0.5 ? 'text-success' : winRate >= 0.4 ? 'text-warning' : 'text-danger';
+                        const pnlClass = pnl >= 0 ? 'text-success' : 'text-danger';
+                        
+                        metricsBody.innerHTML += `
+                            <tr>
+                                <td><strong>${model.product_id}</strong></td>
+                                <td><span class="badge bg-secondary">${mt.name}</span></td>
+                                <td class="${winRateClass}">${winRate > 0 ? (winRate * 100).toFixed(1) + '%' : '-'}</td>
+                                <td>${pf > 0 ? pf.toFixed(2) : '-'}</td>
+                                <td class="${pnlClass}">${pnl !== 0 ? (pnl * 100).toFixed(2) + '%' : '-'}</td>
+                                <td>${trades > 0 ? trades : '-'}</td>
+                                <td><small>${atrStr}</small></td>
+                            </tr>
+                        `;
+                    });
+                });
+
+                // Populate Agreement Matrix with individual model signals
+                const matrixBody = document.getElementById('agreementMatrixBody');
+                
+                modelsArray.forEach(model => {
+                    const rfBadge = model.rf_signal === 'BUY' ? 'bg-success' : 
+                                   model.rf_signal === 'SELL' ? 'bg-danger' : 'bg-secondary';
+                    const lrBadge = model.lr_signal === 'BUY' ? 'bg-success' : 
+                                   model.lr_signal === 'SELL' ? 'bg-danger' : 'bg-secondary';
+                    const mlpBadge = model.mlp_signal === 'BUY' ? 'bg-success' : 
+                                   model.mlp_signal === 'SELL' ? 'bg-danger' : 'bg-secondary';
+                    const gbBadge = model.gb_signal === 'BUY' ? 'bg-success' : 
+                                   model.gb_signal === 'SELL' ? 'bg-danger' : 'bg-secondary';
+                    const ridgeBadge = model.ridge_signal === 'BUY' ? 'bg-success' : 
+                                      model.ridge_signal === 'SELL' ? 'bg-danger' : 'bg-secondary';
+                    
+                    const agreeClass = model.unanimous ? 'bg-success' : 
+                                  model.agreement >= 0.66 ? 'bg-warning' : 'bg-secondary';
+                    
+                    matrixBody.innerHTML += `
+                        <tr>
+                            <td><strong>${model.product_id}</strong></td>
+                            <td>
+                                <span class="badge ${model.signal === 'BUY' ? 'bg-success' : 
+                                               model.signal === 'SELL' ? 'bg-danger' : 'bg-secondary'}">
+                                    ${model.signal || 'N/A'}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge ${rfBadge}">${model.rf_signal || '-'}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${lrBadge}">${model.lr_signal || '-'}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${mlpBadge}">${model.mlp_signal || '-'}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${gbBadge}">${model.gb_signal || '-'}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${ridgeBadge}">${model.ridge_signal || '-'}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${agreeClass}">${Math.round((model.agreement || 0) * 100)}%</span>
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                loadingState.style.display = 'none';
+                overviewCards.style.display = 'block';
+                
+                // Load retrain status
+                loadRetrainStatus();
+            } catch (error) {
+                console.error('Error loading models:', error);
+                loadingState.style.display = 'none';
+                errorState.style.display = 'block';
+                document.getElementById('errorMessage').textContent = error.message;
+            }
+        }
+        
+        async function loadRetrainStatus() {
+            try {
+                const statusData = await fetchJSON(API.retrainProgress);
+                if (statusData) {
+                    const daysSince = statusData.days_since_retrain;
+                    const lastDate = statusData.last_retrain_date;
+                    const autoEnabled = statusData.auto_retrain_enabled;
+                    
+                    console.log('Retrain status loaded:', statusData);
+                    
+                    if (daysSince !== null && daysSince !== undefined && typeof daysSince === 'number') {
+                        const dayWord = daysSince === 1 ? 'day' : 'days';
+                        document.getElementById('daysSinceRetrain').textContent = 
+                            `Last retrain: ${daysSince} ${dayWord} ago`;
+                        document.getElementById('retrainStatus').textContent = 
+                            autoEnabled ? 'Auto: Enabled' : 'Auto: Disabled';
+                        document.getElementById('retrainStatus').className = 
+                            `badge ${autoEnabled ? 'bg-success' : 'bg-secondary'} me-2`;
+                    } else if (lastDate) {
+                        document.getElementById('daysSinceRetrain').textContent = 
+                            `Last retrain: ${lastDate}`;
+                        document.getElementById('retrainStatus').textContent = 
+                            autoEnabled ? 'Auto: Enabled' : 'Auto: Disabled';
+                        document.getElementById('retrainStatus').className = 
+                            `badge ${autoEnabled ? 'bg-success' : 'bg-secondary'} me-2`;
+                    } else {
+                        document.getElementById('daysSinceRetrain').textContent = 'Last retrain: Never';
+                        document.getElementById('retrainStatus').textContent = 'Auto: Disabled';
+                        document.getElementById('retrainStatus').className = 'badge bg-secondary me-2';
+                    }
+                } else {
+                    console.error('Failed to load retrain status:', statusData);
+                }
+            } catch (e) {
+                console.error('Error loading retrain status:', e);
+                document.getElementById('daysSinceRetrain').textContent = 'Last retrain: Error';
+            }
+        }
+        
+        async function retrainModels() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Retraining...';
+            
+            try {
+                const r = await fetch(API.retrain, { method: 'POST' });
+                const result = await r.json();
+                
+                if (result.status === 'started') {
+                    showToast('Model retraining started in background...', 'info');
+                    pollRetrainProgress();
+                } else if (result.status === 'success') {
+                    showToast(result.message, 'success');
+                    loadModelsData();
+                } else if (result.status === 'running') {
+                    showToast('Retrain already in progress: ' + result.message, 'warning');
+                    pollRetrainProgress();
+                } else {
+                    showToast('Retrain failed: ' + (result.message || 'Unknown error'), 'danger');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-sync me-1"></i>Retrain Models';
+                }
+            } catch (e) {
+                showToast('Retrain error: ' + e.message, 'danger');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-sync me-1"></i>Retrain Models';
+            }
+        }
+        
+        async function pollRetrainProgress() {
+            const status = await fetchJSON(API.retrainProgress);
+            if (status && status.in_progress) {
+                const current = status.current_model || 'Starting...';
+                document.getElementById('daysSinceRetrain').textContent = 
+                    `Training: ${current} (${status.completed || 0}/${status.total || 8})`;
+                document.getElementById('retrainStatus').textContent = 'Auto: Training...';
+                document.getElementById('retrainStatus').className = 'badge bg-warning me-2';
+                pollInterval = setTimeout(pollRetrainProgress, 5000);
+            } else if (status && status.result) {
+                if (pollInterval) {
+                    clearTimeout(pollInterval);
+                    pollInterval = null;
+                }
+                if (status.result.status === 'success') {
+                    showToast('Model retraining completed! ' + status.result.message, 'success');
+                } else if (status.result.status === 'error') {
+                    showToast('Retrain failed: ' + status.result.message, 'danger');
+                }
+                loadRetrainStatus();
+                loadModelsData();
+                document.getElementById('retrainModels').disabled = false;
+                document.getElementById('retrainModels').innerHTML = '<i class="fas fa-sync me-1"></i>Retrain Models';
+            }
+        }
+        
+        async function generateSignals() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Generating...';
+            
+            showToast('Generating signals...', 'info');
+            
+            try {
+                const r = await fetch(API.generateSignals, { method: 'POST' });
+                const result = await r.json();
+                
+                if (result.status === 'success') {
+                    document.getElementById('lastUpdated').textContent = result.timestamp;
+                    showToast(result.message, 'success');
+                } else {
+                    showToast('Signal generation failed: ' + (result.message || 'Unknown error'), 'danger');
+                }
+            } catch (e) {
+                showToast('Signal generation error: ' + e.message, 'danger');
+            }
+            
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-bolt me-1"></i>Generate Signals';
+            
+            // Reload data after signal generation
+            loadModelsData();
+        }
+
+        document.addEventListener('DOMContentLoaded', loadModelsData);
+    </script>
 </body>
 </html>

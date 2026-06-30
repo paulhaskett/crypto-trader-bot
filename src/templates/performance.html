@@ -6,118 +6,550 @@
     <title>Performance - Crypto Trading Bot</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bs-success: #198754;
+            --bs-danger: #dc3545;
+            --bs-warning: #ffc107;
+        }
+        body { background-color: #f8f9fa; min-height: 100vh; }
+        .metric-card { border-radius: 10px; transition: transform 0.2s; }
+        .metric-card:hover { transform: translateY(-2px); }
+        .card-icon { font-size: 2rem; opacity: 0.8; }
+        .pnl-positive { color: var(--bs-success); }
+        .pnl-negative { color: var(--bs-danger); }
+        .chart-container { background: white; border-radius: 10px; padding: 15px; }
+    </style>
 </head>
-<body class="bg-light">
-    <!-- Navigation -->
+<body>
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-container"></div>
+
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-        <div class="container">
-            <a class="navbar-brand" href="/">
-                <i class="fas fa-robot"></i> Crypto Trading Bot
-            </a>
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/"><i class="fas fa-robot me-2"></i>Crypto Trading Bot</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="/">
-                            <i class="fas fa-tachometer-alt"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/trades">
-                            <i class="fas fa-exchange-alt"></i> Trades
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link active" href="/performance">
-                            <i class="fas fa-chart-line"></i> Performance
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/models">
-                            <i class="fas fa-brain"></i> AI Models
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/settings">
-                            <i class="fas fa-cogs"></i> Settings
-                        </a>
-                    </li>
+                    <li class="nav-item"><a class="nav-link" href="/"><i class="fas fa-tachometer-alt me-1"></i>Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/trades"><i class="fas fa-exchange-alt me-1"></i>Trades</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/performance"><i class="fas fa-chart-line me-1"></i>Performance</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/models"><i class="fas fa-brain me-1"></i>AI Models</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cogs me-1"></i>Settings</a></li>
                 </ul>
             </div>
         </div>
     </nav>
 
-    <div class="container mt-4">
+    <div class="container-fluid py-4">
         <div class="row mb-4">
-            <div class="col-md-12">
-                <h2><i class="fas fa-chart-line"></i> Performance Analytics</h2>
+            <div class="col-md-8">
+                <h2><i class="fas fa-chart-line me-2"></i>Live Trading Performance</h2>
+                <small class="text-muted">Based on executed trades | <span id="trade-count-info">Loading...</span></small>
+            </div>
+            <div class="col-md-4 text-end">
+                <button class="btn btn-primary" onclick="loadPerformance()">
+                    <i class="fas fa-sync me-1"></i>Refresh
+                </button>
             </div>
         </div>
+        
+        <div id="dataWarning" class="alert alert-warning" style="display:none;">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            <span id="dataWarningText"></span>
+        </div>
 
-        <!-- Performance Periods -->
-        <div class="row mb-4">
-            {% for period, data in performance_data.items() %}
-            <div class="col-md-3">
-                <div class="card">
-                    <div class="card-body text-center">
-                        <h5 class="card-title">{{ period }} Performance</h5>
-                        <h4 class="text-{{ 'success' if data.total_pnl|default(0) >= 0 else 'danger' }}">
-                            ${{ "%.2f"|format(data.total_pnl|default(0)) }}
-                        </h4>
-                        <small class="text-muted">
-                            Win Rate: {{ "%.1f"|format(data.win_rate|default(0) * 100) }}%
-                        </small>
+        <div id="loadingState" class="text-center py-5">
+            <div class="spinner-border text-primary" role="status"></div>
+            <p class="mt-2 text-muted">Loading performance data...</p>
+        </div>
+
+        <div id="contentArea" style="display: none;">
+            <div class="row mb-3">
+                <div class="col-md-2">
+                    <div class="card metric-card border-primary h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-exchange-alt card-icon text-primary mb-2"></i>
+                            <h6 class="text-muted">Total Trades</h6>
+                            <h2 class="text-primary" id="stat-total">-</h2>
+                        </div>
                     </div>
                 </div>
-            </div>
-            {% endfor %}
-        </div>
-
-        <!-- Product Performance -->
-        {% if product_stats %}
-        <div class="row">
-            <div class="col-md-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h5>Performance by Asset</h5>
+                <div class="col-md-2">
+                    <div class="card metric-card border-success h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-percentage card-icon text-success mb-2"></i>
+                            <h6 class="text-muted">Win Rate</h6>
+                            <h2 class="text-success" id="stat-winrate">-</h2>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Asset</th>
-                                        <th>Trades</th>
-                                        <th>Wins</th>
-                                        <th>Win Rate</th>
-                                        <th>Total P&L</th>
-                                        <th>Avg P&L</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for product, stats in product_stats.items() %}
-                                    <tr>
-                                        <td><strong>{{ product }}</strong></td>
-                                        <td>{{ stats.trades }}</td>
-                                        <td>{{ stats.wins }}</td>
-                                        <td>{{ "%.1f"|format(stats.win_rate) }}%</td>
-                                        <td class="{{ 'text-success' if stats.total_pnl >= 0 else 'text-danger' }}">
-                                            ${{ "%.2f"|format(stats.total_pnl) }}
-                                        </td>
-                                        <td class="{{ 'text-success' if stats.avg_pnl >= 0 else 'text-danger' }}">
-                                            ${{ "%.2f"|format(stats.avg_pnl) }}
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
+                </div>
+                <div class="col-md-2">
+                    <div class="card metric-card h-100" id="stat-pnl-container">
+                        <div class="card-body text-center">
+                            <i class="fas fa-coins card-icon mb-2" id="pnl-icon"></i>
+                            <h6 class="text-muted">Total P&L</h6>
+                            <h2 id="stat-pnl">-</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card metric-card border-success h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-trophy card-icon text-success mb-2"></i>
+                            <h6 class="text-muted">Winning Trades</h6>
+                            <h2 class="text-success" id="stat-winning">-</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card metric-card border-danger h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-thumbs-down card-icon text-danger mb-2"></i>
+                            <h6 class="text-muted">Losing Trades</h6>
+                            <h2 class="text-danger" id="stat-losing">-</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card metric-card border-info h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-calculator card-icon text-info mb-2"></i>
+                            <h6 class="text-muted">Profit Factor</h6>
+                            <h3 class="text-info" id="stat-profit-factor">-</h3>
                         </div>
                     </div>
                 </div>
             </div>
+
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card metric-card border-success h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-arrow-up card-icon text-success mb-2"></i>
+                            <h6 class="text-muted">Best Trade</h6>
+                            <h3 class="text-success" id="stat-best">-</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card metric-card border-danger h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-arrow-down card-icon text-danger mb-2"></i>
+                            <h6 class="text-muted">Worst Trade</h6>
+                            <h3 class="text-danger" id="stat-worst">-</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card metric-card border-warning h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-plus card-icon text-warning mb-2"></i>
+                            <h6 class="text-muted">Avg Win</h6>
+                            <h3 class="text-warning" id="stat-avgwin">-</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card metric-card border-warning h-100">
+                        <div class="card-body text-center">
+                            <i class="fas fa-minus card-icon text-warning mb-2"></i>
+                            <h6 class="text-muted">Avg Loss</h6>
+                            <h3 class="text-warning" id="stat-avgloss">-</h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Phase 4: Signal Precision Cards -->
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="card metric-card border-primary h-100">
+                        <div class="card-header bg-primary text-white">
+                            <h6 class="mb-0"><i class="fas fa-arrow-up me-2"></i>BUY Signal Precision</h6>
+                        </div>
+                        <div class="card-body text-center">
+                            <div class="row">
+                                <div class="col-4">
+                                    <h6 class="text-muted small">Trades</h6>
+                                    <h4 id="buy-total">-</h4>
+                                </div>
+                                <div class="col-4">
+                                    <h6 class="text-muted small">Wins</h6>
+                                    <h4 class="text-success" id="buy-wins">-</h4>
+                                </div>
+                                <div class="col-4">
+                                    <h6 class="text-muted small">Losses</h6>
+                                    <h4 class="text-danger" id="buy-losses">-</h4>
+                                </div>
+                            </div>
+                            <hr>
+                            <h6 class="text-muted">Precision</h6>
+                            <h2 id="buy-precision" class="text-primary">-</h2>
+                            <small class="text-muted" id="buy-pnl">P&L: -</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card metric-card border-danger h-100">
+                        <div class="card-header bg-danger text-white">
+                            <h6 class="mb-0"><i class="fas fa-arrow-down me-2"></i>SELL Signal Precision</h6>
+                        </div>
+                        <div class="card-body text-center">
+                            <div class="row">
+                                <div class="col-4">
+                                    <h6 class="text-muted small">Trades</h6>
+                                    <h4 id="sell-total">-</h4>
+                                </div>
+                                <div class="col-4">
+                                    <h6 class="text-muted small">Wins</h6>
+                                    <h4 class="text-success" id="sell-wins">-</h4>
+                                </div>
+                                <div class="col-4">
+                                    <h6 class="text-muted small">Losses</h6>
+                                    <h4 class="text-danger" id="sell-losses">-</h4>
+                                </div>
+                            </div>
+                            <hr>
+                            <h6 class="text-muted">Precision</h6>
+                            <h2 id="sell-precision" class="text-danger">-</h2>
+                            <small class="text-muted" id="sell-pnl">P&L: -</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-8">
+                    <div class="card chart-container h-100">
+                        <h5><i class="fas fa-chart-line me-2"></i>P&L Over Time</h5>
+                        <canvas id="pnlChart" style="max-height: 300px;"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card chart-container h-100">
+                        <h5><i class="fas fa-chart-pie me-2"></i>Win/Loss Distribution</h5>
+                        <canvas id="winLossChart" style="max-height: 300px;"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="card chart-container h-100">
+                        <h5><i class="fas fa-chart-bar me-2"></i>Trades by Product</h5>
+                        <canvas id="productChart" style="max-height: 250px;"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card chart-container h-100">
+                        <h5><i class="fas fa-coins me-2"></i>P&L by Product</h5>
+                        <canvas id="productPnlChart" style="max-height: 250px;"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card metric-card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="fas fa-table me-2"></i>Performance by Product</h5>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Product</th>
+                                <th>Total Trades</th>
+                                <th>Wins</th>
+                                <th>Losses</th>
+                                <th>Win Rate</th>
+                                <th>Total P&L</th>
+                                <th>Avg P&L</th>
+                            </tr>
+                        </thead>
+                        <tbody id="product-stats-tbody">
+                            <tr><td colspan="7" class="text-center text-muted py-4">No data available</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-        {% endif %}
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const API = {
+            performance: '/api/performance',
+            trades: '/api/trades/stats',
+            closed: '/api/closed_positions'
+        };
+
+        let pnlChart = null;
+        let winLossChart = null;
+        let productChart = null;
+        let productPnlChart = null;
+
+        async function fetchJSON(url) {
+            try {
+                const r = await fetch(url);
+                return r.ok ? await r.json() : null;
+            } catch { return null; }
+        }
+
+        function formatGBP(value) {
+            const prefix = value >= 0 ? '+' : '';
+            return prefix + '£' + value.toFixed(2);
+        }
+
+        async function loadPerformance() {
+            const loadingState = document.getElementById('loadingState');
+            const contentArea = document.getElementById('contentArea');
+
+            loadingState.style.display = 'block';
+            contentArea.style.display = 'none';
+
+            try {
+                const perfData = await fetchJSON(API.performance);
+
+                if (!perfData || perfData.summary?.total_trades === 0) {
+                    loadingState.innerHTML = '<div class="alert alert-info">No trades recorded yet</div>';
+                    return;
+                }
+
+                // Build trades list from daily_pnl for non-product-specific stats
+                let allTrades = [];
+                if (perfData.daily_pnl) {
+                    perfData.daily_pnl.forEach(d => {
+                        allTrades.push({
+                            product_id: 'various',
+                            side: d.pnl >= 0 ? 'BUY' : 'SELL',
+                            pnl: d.pnl || 0,
+                            date: d.date || '',
+                            status: 'closed'
+                        });
+                    });
+                }
+
+                updateStats(perfData, allTrades);
+                updateCharts(perfData, allTrades);
+                updateProductTable(perfData);
+
+                loadingState.style.display = 'none';
+                contentArea.style.display = 'block';
+
+            } catch (error) {
+                console.error('Error loading performance:', error);
+                loadingState.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        Failed to load performance data
+                    </div>
+                `;
+            }
+        }
+
+        function updateStats(perfData, trades) {
+            const summary = perfData?.summary || {};
+            const hasData = summary?.has_sufficient_data !== false;
+            const minTrades = summary?.min_trades_required || 30;
+            const total = summary?.total_trades || 0;
+            const message = perfData?.message;
+            
+            // Show warning if insufficient data
+            const warningEl = document.getElementById('dataWarning');
+            const warningText = document.getElementById('dataWarningText');
+            if (message) {
+                warningEl.style.display = 'block';
+                warningText.textContent = message;
+            } else {
+                warningEl.style.display = 'none';
+            }
+            
+            // Update trade count info
+            document.getElementById('trade-count-info').textContent = 
+                `${total} trades (need ${minTrades}+ for reliable metrics)`;
+            
+            // Show win rate only if sufficient data
+            const winRate = hasData ? (summary?.win_rate || 0).toFixed(1) : '---';
+            const totalPnl = summary?.total_pnl || 0;
+            const profitFactor = hasData ? (summary?.profit_factor || 0) : 0;
+            
+            const winning = trades.filter(t => (t.pnl || 0) > 0);
+            const losing = trades.filter(t => (t.pnl || 0) < 0);
+            const bestTrade = winning.length > 0 ? Math.max(...winning.map(t => t.pnl || 0)) : 0;
+            const worstTrade = losing.length > 0 ? Math.min(...losing.map(t => t.pnl || 0)) : 0;
+            const avgWin = winning.length > 0 ? winning.reduce((sum, t) => sum + (t.pnl || 0), 0) / winning.length : 0;
+            const avgLoss = losing.length > 0 ? losing.reduce((sum, t) => sum + (t.pnl || 0), 0) / losing.length : 0;
+
+            document.getElementById('stat-total').textContent = total;
+            document.getElementById('stat-total').className = hasData ? 'text-primary' : 'text-warning';
+            document.getElementById('stat-winrate').textContent = winRate + '%';
+            document.getElementById('stat-winrate').className = hasData ? 'text-success' : 'text-warning';
+            document.getElementById('stat-profit-factor').textContent = hasData && profitFactor > 0 ? profitFactor.toFixed(2) : '-';
+            document.getElementById('stat-profit-factor').className = hasData ? 'text-info' : 'text-warning';
+
+            const pnlEl = document.getElementById('stat-pnl');
+            const pnlContainer = document.getElementById('stat-pnl-container');
+            const pnlIcon = document.getElementById('pnl-icon');
+            pnlEl.textContent = formatGBP(totalPnl);
+            pnlEl.className = totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+            pnlIcon.className = `fas fa-coins card-icon mb-2 ${totalPnl >= 0 ? 'text-success' : 'text-danger'}`;
+            pnlContainer.className = `card metric-card h-100 border-${totalPnl >= 0 ? 'success' : 'danger'}`;
+
+            document.getElementById('stat-winning').textContent = winning.length;
+            document.getElementById('stat-losing').textContent = losing.length;
+            document.getElementById('stat-best').textContent = formatGBP(bestTrade);
+            document.getElementById('stat-worst').textContent = formatGBP(worstTrade);
+            document.getElementById('stat-avgwin').textContent = winning.length > 0 ? formatGBP(avgWin) : '£0.00';
+            document.getElementById('stat-avgloss').textContent = losing.length > 0 ? formatGBP(avgLoss) : '£0.00';
+            
+            // Phase 4: Update signal precision
+            const signalPrecision = perfData?.signal_precision || {buy: {}, sell: {}};
+            const buyData = signalPrecision.buy || {};
+            const sellData = signalPrecision.sell || {};
+            
+            document.getElementById('buy-total').textContent = buyData.total || 0;
+            document.getElementById('buy-wins').textContent = buyData.wins || 0;
+            document.getElementById('buy-losses').textContent = buyData.losses || 0;
+            document.getElementById('buy-precision').textContent = (buyData.precision !== null && buyData.precision !== undefined) ? buyData.precision + '%' : '---';
+            document.getElementById('buy-precision').className = (buyData.precision !== null && buyData.precision !== undefined) ? (buyData.precision >= 50 ? 'text-success' : 'text-danger') : 'text-muted';
+            document.getElementById('buy-pnl').textContent = 'P&L: ' + formatGBP(buyData.total_pnl || 0);
+            
+            document.getElementById('sell-total').textContent = sellData.total || 0;
+            document.getElementById('sell-wins').textContent = sellData.wins || 0;
+            document.getElementById('sell-losses').textContent = sellData.losses || 0;
+            document.getElementById('sell-precision').textContent = (sellData.precision !== null && sellData.precision !== undefined) ? sellData.precision + '%' : '---';
+            document.getElementById('sell-precision').className = (sellData.precision !== null && sellData.precision !== undefined) ? (sellData.precision >= 50 ? 'text-success' : 'text-danger') : 'text-muted';
+            document.getElementById('sell-pnl').textContent = 'P&L: ' + formatGBP(sellData.total_pnl || 0);
+        }
+
+        function updateCharts(perfData, trades) {
+            const labels = [...new Set(trades.map(t => t.date).filter(d => d))].sort();
+            let cumulativePnl = 0;
+            const pnlData = labels.map(date => {
+                const dayTrades = trades.filter(t => t.date === date);
+                const dayPnl = dayTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+                cumulativePnl += dayPnl;
+                return cumulativePnl;
+            });
+
+            const lastPnl = pnlData[pnlData.length - 1] || 0;
+            const pnlColor = lastPnl >= 0 ? '#198754' : '#dc3545';
+            const pnlBg = lastPnl >= 0 ? 'rgba(25, 135, 84, 0.1)' : 'rgba(220, 53, 69, 0.1)';
+
+            const ctx1 = document.getElementById('pnlChart').getContext('2d');
+            if (pnlChart) pnlChart.destroy();
+            pnlChart = new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Cumulative P&L',
+                        data: pnlData,
+                        borderColor: pnlColor,
+                        backgroundColor: pnlBg,
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: false }
+                    }
+                }
+            });
+
+            const winning = trades.filter(t => (t.pnl || 0) > 0).length;
+            const losing = trades.filter(t => (t.pnl || 0) < 0).length;
+            const ctx2 = document.getElementById('winLossChart').getContext('2d');
+            if (winLossChart) winLossChart.destroy();
+            winLossChart = new Chart(ctx2, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Wins', 'Losses'],
+                    datasets: [{
+                        data: [winning || 1, losing || 0],
+                        backgroundColor: ['#198754', '#dc3545']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+
+            const pb = perfData.product_breakdown || [];
+            const ctx3 = document.getElementById('productChart').getContext('2d');
+            if (productChart) productChart.destroy();
+            productChart = new Chart(ctx3, {
+                type: 'bar',
+                data: {
+                    labels: pb.map(p => p.product.replace('-GBP', '')),
+                    datasets: [{
+                        label: 'Trades',
+                        data: pb.map(p => p.trades),
+                        backgroundColor: '#0d6efd'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { stepSize: 1 } }
+                    }
+                }
+            });
+
+            const ctx4 = document.getElementById('productPnlChart').getContext('2d');
+            if (productPnlChart) productPnlChart.destroy();
+            productPnlChart = new Chart(ctx4, {
+                type: 'bar',
+                data: {
+                    labels: pb.map(p => p.product.replace('-GBP', '')),
+                    datasets: [{
+                        label: 'P&L',
+                        data: pb.map(p => p.total_pnl),
+                        backgroundColor: pb.map(p => p.total_pnl >= 0 ? '#198754' : '#dc3545')
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        function updateProductTable(perfData) {
+            const pb = perfData.product_breakdown || [];
+            const tbody = document.getElementById('product-stats-tbody');
+
+            const rows = pb.map(p => `
+                <tr>
+                    <td><strong>${p.product}</strong></td>
+                    <td>${p.trades}</td>
+                    <td class="pnl-positive">${p.wins}</td>
+                    <td class="pnl-negative">${p.losses}</td>
+                    <td>${p.win_rate}%</td>
+                    <td class="${p.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${formatGBP(p.total_pnl)}</td>
+                    <td class="${p.avg_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${formatGBP(p.avg_pnl)}</td>
+                </tr>
+            `);
+
+            tbody.innerHTML = rows.length > 0 ? rows.join('') : '<tr><td colspan="7" class="text-center text-muted py-4">No trade data</td></tr>';
+        }
+
+        document.addEventListener('DOMContentLoaded', loadPerformance);
+    </script>
 </body>
 </html>

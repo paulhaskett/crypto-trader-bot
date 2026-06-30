@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,1312 +7,659 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        .status-indicator {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-left: auto;
+        :root {
+            --bs-success: #198754;
+            --bs-danger: #dc3545;
+            --bs-warning: #ffc107;
         }
+        body { background-color: #f8f9fa; min-height: 100vh; }
+        .metric-card { border-radius: 10px; transition: transform 0.2s; }
+        .metric-card:hover { transform: translateY(-2px); }
+        .signal-card { border-radius: 10px; transition: transform 0.2s; }
+        .signal-card:hover { transform: translateY(-2px); }
+        .signal-buy { border-left: 4px solid var(--bs-success); }
 
-        .status-online {
-            background-color: #28a745;
-        }
+.position-row {
+    /* No border - bottom row has the border */
+}
 
-        .status-warning {
-            background-color: #ffc107;
-        }
+.current-price {
+    font-size: 1.1em;
+    font-weight: 700;
+    color: #0d6efd;
+}
 
-        .status-danger {
-            background-color: #dc3545;
-        }
+.trailing-stop-row {
+    background-color: #f8f9fa;
+    border-top: 1px solid #dee2e6;
+    border-bottom: 3px solid #495057;
+}
 
-        .model-card {
-            border: 1px solid #dee2e6;
-            border-radius: 0.375rem;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            background-color: #f8f9fa;
-        }
+.trailing-stop-row td {
+    font-size: 0.9em;
+    padding: 4px 8px;
+}
 
-        /* Crypto Balance Display Styling */
-        .crypto-balance-display {
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            border-radius: 8px;
-            padding: 8px;
-            margin-bottom: 10px;
-            border-left: 4px solid #007bff;
-        }
-
-        .card.border-success {
-            border-left: 4px solid #28a745 !important;
-        }
-
-        .crypto-balance-display .col-6 {
-            padding: 2px;
-        }
-
-        .crypto-balance-display strong {
-            font-size: 0.9rem;
-        }
-
-        .percentage-badge {
-            background: #17a2b8;
-            color: white;
-            padding: 2px 6px;
-            border-radius: 12px;
-            font-size: 0.75rem;
-        }
+.trailing-stop-row td:nth-child(2),
+.trailing-stop-row td:nth-child(3),
+.trailing-stop-row td:nth-child(4),
+.trailing-stop-row td:nth-child(5) {
+    font-weight: 500;
+}
+        .signal-sell { border-left: 4px solid var(--bs-danger); }
+        .signal-hold { border-left: 4px solid #6c757d; }
+        .pnl-positive { color: var(--bs-success); }
+        .pnl-negative { color: var(--bs-danger); }
+        .collapse-toggle { cursor: pointer; user-select: none; }
+        .collapse-toggle::after { content: '▼'; font-size: 0.7rem; margin-left: 8px; transition: transform 0.2s; }
+        .collapse-toggle.collapsed::after { transform: rotate(-90deg); }
+        .table-container { background: white; border-radius: 10px; overflow: hidden; }
+        .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1050; }
+        .card-icon { font-size: 2rem; opacity: 0.8; }
     </style>
-
-    <!-- Essential JavaScript functions loaded in head for immediate availability -->
-    <script>
-        // Display currency change function - defined globally for immediate access
-        window.changeDisplayCurrency = function (currency) {
-            console.log('changeDisplayCurrency called with:', currency);
-            
-            // Show loading state
-            const selector = document.getElementById('displayCurrencySelector');
-            if (selector) {
-                selector.disabled = true;
-                selector.style.opacity = '0.5';
-            }
-            
-            fetch('/api/settings/display_currency', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ value: currency })
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        console.log('Display currency changed successfully to:', currency);
-                        showNotification(`Display currency changed to ${currency}`, 'success');
-                        // Reload to update all currency displays
-                        setTimeout(() => location.reload(), 1000);
-                    } else {
-                        console.error('Display currency change failed:', data.message);
-                        showNotification(`Failed to change display currency: ${data.message}`, 'error');
-                        // Re-enable selector on error
-                        if (selector) {
-                            selector.disabled = false;
-                            selector.style.opacity = '1';
-                        }
-                    }
-                })
-                .catch(error => {
-                    console.error('Network error:', error);
-                    showNotification(`Error changing display currency: ${error}`, 'error');
-                    // Re-enable selector on error
-                    if (selector) {
-                        selector.disabled = false;
-                        selector.style.opacity = '1';
-                    }
-                });
-        };
-
-        // Base currency change function (for settings page)
-        window.changeBaseCurrency = function (currency) {
-            console.log('changeBaseCurrency called with:', currency);
-            
-            if (!confirm(`Changing base currency to ${currency} will restart the trading system with new pairs. Continue?`)) {
-                return;
-            }
-            
-            fetch('/api/settings/base_currency', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ value: currency })
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        console.log('Base currency changed successfully to:', currency);
-                        showNotification(`Base currency changed to ${currency}. Trading pairs updated.`, 'success');
-                        // Reload to update trading pairs
-                        setTimeout(() => location.reload(), 2000);
-                    } else {
-                        console.error('Base currency change failed:', data.message);
-                        showNotification(`Failed to change base currency: ${data.message}`, 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('Network error:', error);
-                    showNotification(`Error changing base currency: ${error}`, 'error');
-                });
-        };
-
-        // Notification function
-        function showNotification(message, type = 'info') {
-            // Create notification element if it doesn't exist
-            let notification = document.getElementById('notification');
-            if (!notification) {
-                notification = document.createElement('div');
-                notification.id = 'notification';
-                notification.className = 'position-fixed top-0 start-50 translate-middle-x mt-3';
-                notification.style.zIndex = '9999';
-                document.body.appendChild(notification);
-            }
-            
-            // Set notification content and style
-            notification.className = `position-fixed top-0 start-50 translate-middle-x mt-3 alert alert-${type === 'error' ? 'danger' : type === 'success' ? 'success' : 'info'} alert-dismissible fade show`;
-            notification.innerHTML = `
-                ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            `;
-            
-            // Auto-hide after 5 seconds
-            setTimeout(() => {
-                if (notification && notification.parentNode) {
-                    notification.remove();
-                }
-            }, 5000);
-        }
-
-        // Exchange rate update function - defined globally for immediate access
-        window.updateExchangeRate = async function () {
-            try {
-                const response = await fetch('/api/exchange-rate');
-                const data = await response.json();
-
-                if (data.exchange_rate) {
-                    const rate = data.exchange_rate.usd_to_display;
-                    const age = data.exchange_rate.age_minutes;
-
-                    const rateElement = document.getElementById('exchange-rate');
-                    const ageElement = document.getElementById('rate-age');
-
-                    if (rateElement) {
-                        rateElement.textContent = `1 USD = ${rate.toFixed(4)} GBP`;
-                    }
-                    if (ageElement) {
-                        ageElement.textContent = age ? `Updated ${Math.round(age)} min ago` : 'Age unknown';
-                    }
-
-                    console.log(`Exchange rate updated: ${rate}, age: ${age} min`);
-                } else if (data.error) {
-                    const rateElement = document.getElementById('exchange-rate');
-                    const ageElement = document.getElementById('rate-age');
-                    if (rateElement) rateElement.textContent = 'Error loading rate';
-                    if (ageElement) ageElement.textContent = data.error;
-                }
-            } catch (error) {
-                console.error('Failed to fetch exchange rate:', error);
-                const rateElement = document.getElementById('exchange-rate');
-                const ageElement = document.getElementById('rate-age');
-                if (rateElement) rateElement.textContent = 'Connection error';
-                if (ageElement) ageElement.textContent = 'Retry later';
-            }
-        };
-
-        // Countdown update function - defined globally for immediate access
-        window.updateCountdown = async function () {
-            try {
-                const response = await fetch('/api/countdown');
-                const data = await response.json();
-
-                if (data.error) {
-                    console.error('Countdown error:', data.error);
-                    return;
-                }
-
-                const timerElement = document.getElementById('countdown-timer');
-                const progressElement = document.getElementById('countdown-progress');
-                const lastCycleElement = document.getElementById('last-cycle-time');
-
-                if (timerElement && data.trading_active) {
-                    const minutes = Math.floor(data.remaining_seconds / 60);
-                    const seconds = data.remaining_seconds % 60;
-                    timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-                    timerElement.className = `h4 ${data.remaining_seconds < 300 ? 'text-danger' : 'text-warning'}`;
-                } else if (timerElement) {
-                    timerElement.textContent = 'PAUSED';
-                    timerElement.className = 'h4 text-secondary';
-                }
-
-                if (progressElement) {
-                    progressElement.style.width = `${data.progress_percent}%`;
-                    progressElement.className = `progress-bar ${data.progress_percent > 80 ? 'bg-danger' : 'bg-warning'}`;
-                }
-
-                if (lastCycleElement) {
-                    lastCycleElement.textContent = `Last: ${data.last_cycle_time}`;
-                }
-
-            } catch (error) {
-                console.error('Failed to update countdown:', error);
-                const timerElement = document.getElementById('countdown-timer');
-                if (timerElement) timerElement.textContent = 'Error';
-            }
-        };
-
-        // Start countdown updates after page load
-        document.addEventListener('DOMContentLoaded', function () {
-            updateCountdown();
-            setInterval(updateCountdown, 1000);  // Update every second
-        });
-
-    </script>
 </head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.95);z-index:9999;display:flex;align-items:center;justify-content:center;">
+        <div class="text-center">
+            <div class="spinner-border text-primary mb-3" style="width:3rem;height:3rem;"><span class="visually-hidden">Loading...</span></div>
+            <h5>Loading Dashboard...</h5>
+        </div>
+    </div>
 
-<body class="bg-light">
-    <!-- Navigation -->
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Navbar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-        <div class="container">
-            <a class="navbar-brand" href="/">
-                <i class="fas fa-robot"></i> Crypto Trading Bot
-            </a>
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/"><i class="fas fa-robot me-2"></i>Crypto Trading Bot</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link active" href="/">
-                            <i class="fas fa-tachometer-alt"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/trades">
-                            <i class="fas fa-exchange-alt"></i> Trades
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/performance">
-                            <i class="fas fa-chart-line"></i> Performance
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/models">
-                            <i class="fas fa-brain"></i> AI Models
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/settings">
-                            <i class="fas fa-cogs"></i> Settings
-                        </a>
-                    </li>
+                    <li class="nav-item"><a class="nav-link active" href="/"><i class="fas fa-tachometer-alt me-1"></i>Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/trades"><i class="fas fa-exchange-alt me-1"></i>Trades</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/performance"><i class="fas fa-chart-line me-1"></i>Performance</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/models"><i class="fas fa-brain me-1"></i>AI Models</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/settings"><i class="fas fa-cogs me-1"></i>Settings</a></li>
                 </ul>
                 <div class="d-flex align-items-center">
-                    <!-- Display Currency Selector -->
-                    <div class="me-3">
-                        <label class="text-light me-2 small">Display:</label>
-                        <select id="displayCurrencySelector" class="form-select form-select-sm"
-                            onchange="changeDisplayCurrency(this.value)" style="width: auto;">
-                            <option value="USD" {{ 'selected' if display_currency=='USD' else '' }}>USD</option>
-                            <option value="GBP" {{ 'selected' if display_currency=='GBP' else '' }}>GBP</option>
-                        </select>
-                    </div>
-                    
-                    <!-- Base Currency Indicator -->
-                    <div class="me-3">
-                        <label class="text-light me-2 small">Base:</label>
-                        <span class="badge bg-info" id="baseCurrencyBadge">
-                            {{ base_currency }}
-                            {% if currency_info and currency_info.trading_pairs %}
-                            <small class="text-muted">({{ currency_info.trading_pairs|length }} pairs)</small>
-                            {% endif %}
-                        </span>
-                    </div>
-                    
-                    <!-- Exchange Rate Display -->
-                    {% if currency_info and currency_info.exchange_rates %}
-                    <div class="me-3">
-                        <small class="text-light" id="exchangeRateDisplay">
-                            1 USD = {{ "%.4f"|format(currency_info.exchange_rates.usd_to_gbp) }} GBP
-                        </small>
-                    </div>
-                    {% endif %}
-                    
-                    <span class="navbar-text">
-                        <!-- Trading Activity Indicator -->
-                        <span class="badge {{ 'bg-success' if trading_active else 'bg-secondary' }} me-2"
-                            id="tradingActivityBadge">
-                            {% if trading_active %}
-                            <i class="fas fa-play-circle"></i> TRADING
-                            {% else %}
-                            <i class="fas fa-pause-circle"></i> STOPPED
-                            {% endif %}
-                        </span>
-                        <!-- Trading Mode Indicator -->
-                        <span class="badge bg-{{ 'success' if paper_trading else 'danger' }} trading-mode-badge">
-                            {{ 'PAPER TRADING' if paper_trading else 'LIVE TRADING' }}
-                        </span>
-                    </span>
+                    <select id="currency-selector" class="form-select form-select-sm w-auto me-3" onchange="changeCurrency(this.value)">
+                        <option value="GBP">GBP</option>
+                        <option value="USD">USD</option>
+                    </select>
+                    <span class="badge me-2" id="trading-status-badge"><i class="fas fa-pause-circle me-1"></i>STOPPED</span>
+                    <span class="badge bg-danger" id="mode-badge">LIVE</span>
                 </div>
             </div>
+        </div>
     </nav>
 
-    <!-- Key Metrics -->
-    <div class="row mb-4">
-        <div class="col-md-3">
-            <div class="card metric-card border-primary">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-primary">
-                        <i class="fas fa-wallet"></i> Portfolio Value
-                    </h5>
-                    <h3 class="card-text">{{ formatted_total }}</h3>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card metric-card border-{{ 'success' if daily_pnl >= 0 else 'danger' }}">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-{{ 'success' if daily_pnl >= 0 else 'danger' }}">
-                        <i class="fas fa-{{ 'arrow-up' if daily_pnl >= 0 else 'arrow-down' }}"></i> Daily P&L
-                    </h5>
-                    <h3 class="card-text ${{ 'pnl-positive' if daily_pnl >= 0 else 'pnl-negative' }}">
-                        {{ formatted_daily_pnl }}
-                    </h3>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card metric-card border-warning">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-warning">
-                        <i class="fas fa-brain"></i> AI Models
-                    </h5>
-                    <h3 class="card-text">{{ models_trained }}</h3>
-                    <small class="text-muted">Active & Ready</small>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card metric-card border-info">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-info">
-                        <i class="fas fa-trophy"></i> Win Rate
-                    </h5>
-                    <h3 class="card-text">{{ "%.1f"|format(win_rate) }}%</h3>
-                    <small class="text-muted">{{ total_trades_all_time }} total trades</small>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Secondary Metrics -->
-    <div class="row mb-4">
-        <div class="col-md-3">
-            <div class="card metric-card border-secondary">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-secondary">
-                        <i class="fas fa-chart-line"></i> Total P&L
-                    </h5>
-                    <h4
-                        class="card-text {{ 'text-success' if (total_pnl is defined and total_pnl >= 0) else 'text-danger' }}">
-                        {{ formatted_total_pnl }}
-                    </h4>
-                    <small class="text-muted">30-day period</small>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card metric-card border-primary">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-primary">
-                        <i class="fas fa-exchange-alt"></i> Active Positions
-                    </h5>
-                    <h3 class="card-text">{{ active_positions }}</h3>
-                    <small class="text-muted">Currently open</small>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div
-                class="card metric-card border-{{ 'success' if risk_status == 'low' else 'warning' if risk_status == 'medium' else 'danger' }}">
-                <div class="card-body text-center">
-                    <h5
-                        class="card-title text-{{ 'success' if risk_status == 'low' else 'warning' if risk_status == 'medium' else 'danger' }}">
-                        <i class="fas fa-shield-alt"></i> Risk Status
-                    </h5>
-                    <h4 class="card-text text-uppercase">{{ risk_status }}</h4>
-                    <small class="text-muted">Portfolio risk level</small>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card metric-card border-info">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-info">
-                        <i class="fas fa-coins"></i> Currency Info
-                    </h5>
-                    <div class="small text-start">
-                        <div class="mb-1">
-                            <strong>Display:</strong> {{ display_currency }}
-                            {% if display_currency != base_currency %}
-                            <small class="text-muted">(converted from {{ base_currency }})</small>
-                            {% endif %}
-                        </div>
-                        <div class="mb-1">
-                            <strong>Base:</strong> {{ base_currency }}
-                            <small class="text-muted">(trading pairs)</small>
-                        </div>
-                        {% if currency_info and currency_info.exchange_rates %}
-                        <div class="mb-1">
-                            <strong>Rate:</strong> 1 USD = {{ "%.4f"|format(currency_info.exchange_rates.usd_to_gbp) }} GBP
-                        </div>
-                        {% endif %}
-                        {% if market_conditions %}
-                        <div>
-                            <strong>Data Source:</strong>
-                            {% if market_conditions.values() | first | attr('get')('used_conversion_fallback') %}
-                            <span class="badge bg-warning">USD Conversion</span>
-                            {% else %}
-                            <span class="badge bg-success">Direct {{ display_currency }}</span>
-                            {% endif %}
-                        </div>
-                        {% endif %}
+    <div class="container-fluid py-4">
+        <!-- Key Metrics Row 1 -->
+        <div class="row mb-3">
+            <div class="col-md-3">
+                <div class="card metric-card border-primary h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-wallet card-icon text-primary mb-2"></i>
+                        <h6 class="text-muted">Portfolio Value</h6>
+                        <h3 class="text-primary" id="card-portfolio-value">Loading...</h3>
                     </div>
-                    <button class="btn btn-sm btn-outline-info mt-2" onclick="location.reload()">
-                        <i class="fas fa-sync"></i> Refresh
-                    </button>
                 </div>
             </div>
-        </div>
-        <div class="col-md-3">
-            <div
-                class="card metric-card border-{{ 'success' if gbp_status == 'normal' else 'warning' if gbp_status == 'warning' else 'danger' }}">
-                <div class="card-body text-center">
-                    <h5
-                        class="card-title text-{{ 'success' if gbp_status == 'normal' else 'warning' if gbp_status == 'warning' else 'danger' }}">
-                        <i class="fas fa-pound-sign"></i> GBP Balance
-                    </h5>
-                    <div class="h4">£{{ "%.2f"|format(gbp_balance_status.gbp_balance) }}</div>
-                    <small class="text-muted">
-                        {% if gbp_status == 'critical' %}
-                        <strong>Critical Low!</strong> Top up recommended
-                        {% elif gbp_status == 'warning' %}
-                        <strong>Warning:</strong> Low balance
-                        {% else %}
-                        Balance healthy
-                        {% endif %}
-                    </small>
+            <div class="col-md-3">
+                <div class="card metric-card h-100" id="card-daily-pnl-container">
+                    <div class="card-body text-center">
+                        <i class="fas fa-chart-line card-icon mb-2" id="daily-pnl-icon"></i>
+                        <h6 class="text-muted">Daily P&L</h6>
+                        <h3 id="card-daily-pnl">Loading...</h3>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card metric-card border-warning">
-                <div class="card-body text-center">
-                    <h5 class="card-title text-warning">
-                        <i class="fas fa-hourglass-half"></i> Next Trading Cycle
-                    </h5>
-                    <div id="countdown-timer" class="h4 text-warning">Loading...</div>
-                    <small class="text-muted" id="last-cycle-time">--</small>
-                    <div class="progress mt-2" style="height: 6px;">
-                        <div id="countdown-progress" class="progress-bar bg-warning" style="width: 0%"></div>
+            <div class="col-md-3">
+                <div class="card metric-card border-info h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-brain card-icon text-info mb-2"></i>
+                        <h6 class="text-muted">AI Models</h6>
+                        <h3 class="text-info" id="card-ai-models">Loading...</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metric-card border-warning h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-trophy card-icon text-warning mb-2"></i>
+                        <h6 class="text-muted">Win Rate</h6>
+                        <h3 class="text-warning" id="card-win-rate">Loading...</h3>
+                        <small class="text-muted" id="card-total-trades"></small>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
-    <!-- Market Conditions & AI Signals -->
 
-
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0"><i class="fas fa-chart-line"></i> Market Conditions & AI Signals</h5>
-                    <small class="text-muted">Live analysis for trading decisions</small>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        {% for product_id in (currency_info.trading_pairs if currency_info and currency_info.trading_pairs else product_ids) %}
-                        <div class="col-md-4 col-sm-6 mb-3">
-                            <div class="card h-100 border-secondary">
-                                <div class="card-body text-center">
-                                    <h6 class="card-title">
-                                        {% if 'BTC' in product_id %}
-                                        <i class="fab fa-bitcoin text-warning"></i>
-                                        {% elif 'ETH' in product_id %}
-                                        <i class="fab fa-ethereum text-blue"></i>
-                                        {% elif 'SOL' in product_id %}
-                                        <i class="fas fa-sun text-purple"></i>
-                                        {% elif 'DOT' in product_id %}
-                                        <i class="fas fa-circle text-info"></i>
-                                        {% elif 'ADA' in product_id %}
-                                        <i class="fas fa-a text-primary"></i>
-                                        {% elif 'LINK' in product_id %}
-                                        <i class="fas fa-link text-info"></i>
-                                        {% elif 'UNI' in product_id %}
-                                        <i class="fas fa-unicorn text-pink"></i>
-                                        {% elif 'XRP' in product_id %}
-                                        <i class="fas fa-coins text-info"></i>
-                                        {% elif 'LTC' in product_id %}
-                                        <i class="fas fa-l"></i>
-                                        {% endif %}
-                                        {{ product_id.replace('-USD', '').replace('-GBP', '') }}
-                                    </h6>
-
-                                    {% set mc = market_conditions[product_id] if market_conditions is defined and
-                                    product_id in market_conditions else {'price': 0, 'signal': 'HOLD', 'confidence': 0,
-                                    'meets_threshold': false, 'action': 'WAIT'} %}
-
-                                    <div class="mb-2">
-                                        {% if mc.formatted_price %}
-                                        <strong class="text-primary">{{ mc.formatted_price }}</strong>
-                                        {% else %}
-                                        <strong class="text-primary">{{ display_currency }}{{ "%.2f"|format(mc.price) if display_currency == 'USD' else '£%.2f'|format(mc.price) }}</strong>
-                                        {% endif %}
-                                        {% if mc.used_conversion_fallback %}
-                                        <br><small class="text-warning"><i class="fas fa-exchange-alt"></i> Converted from {{ mc.original_pair }}</small>
-                                        {% else %}
-                                        <br><small class="text-muted">Current Price</small>
-                                        {% endif %}
-                                    </div>
-
-                                    <div class="mb-2">
-                                        <span
-                                            class="badge bg-{{ 'success' if mc.signal == 'BUY' else 'danger' if mc.signal == 'SELL' else 'secondary' }}">
-                                            {{ mc.signal }}
-                                        </span>
-                                        <br><small class="text-muted">AI Signal</small>
-                                    </div>
-
-                                    <div class="mb-2">
-                                        <div class="progress" style="height: 8px;">
-                                            <div class="progress-bar bg-{{ 'success' if mc.meets_threshold else 'warning' }}"
-                                                style="width: {{ mc.confidence }}%">
-                                            </div>
-                                        </div>
-                                        <small class="text-muted">{{ "%.1f"|format(mc.confidence) }}% Confidence</small>
-                                    </div>
-
-                                    <div class="mt-2">
-                                        <span class="badge bg-{{ 'success' if mc.meets_threshold else 'secondary' }}">
-                                            <i class="fas fa-{{ 'check' if mc.meets_threshold else 'clock' }}"></i>
-                                            {{ mc.action }}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        {% endfor %}
+        <!-- Key Metrics Row 2 -->
+        <div class="row mb-3">
+            <div class="col-md-2">
+                <div class="card metric-card h-100" id="card-total-pnl-container">
+                    <div class="card-body text-center">
+                        <i class="fas fa-coins card-icon mb-2" id="total-pnl-icon"></i>
+                        <h6 class="text-muted">Realized P&L (30d)</h6>
+                        <h5 id="card-total-pnl">Loading...</h5>
+                        <small class="text-muted" id="card-trade-count"></small>
                     </div>
-
-                    <div class="alert alert-info mt-3">
-                        <h6><i class="fas fa-info-circle"></i> Trading Logic</h6>
-                        <ul class="mb-0 small">
-                            <li><strong>TRADE:</strong> AI confidence ≥60% + risk checks pass</li>
-                            <li><strong>WAIT:</strong> AI confidence less than 60% or conditions not met</li>
-                            <li><strong>Position Size:</strong> Max 0.8% of portfolio (~$0.13)</li>
-                            <li><strong>Analysis:</strong> Runs every 30 minutes</li>
-                        </ul>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card metric-card border-primary h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-exchange-alt card-icon text-primary mb-2"></i>
+                        <h6 class="text-muted">Active Positions</h6>
+                        <h5 class="text-primary" id="card-active-positions">Loading...</h5>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card metric-card border-success h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-clock card-icon text-success mb-2"></i>
+                        <h6 class="text-muted">Next Cycle</h6>
+                        <h5 class="text-success" id="card-countdown">--:--</h5>
+                        <small class="text-muted" id="card-last-cycle">Last: --:--</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card metric-card h-100" id="card-risk-container">
+                    <div class="card-body text-center">
+                        <i class="fas fa-shield-alt card-icon mb-2" id="risk-icon"></i>
+                        <h6 class="text-muted">Risk Status</h6>
+                        <h5 id="card-risk-status">Loading...</h5>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card metric-card border-warning h-100" id="card-gbp-container">
+                    <div class="card-body text-center">
+                        <i class="fas fa-pound-sign card-icon text-warning mb-2"></i>
+                        <h6 class="text-muted">GBP Balance</h6>
+                        <h5 class="text-warning" id="card-gbp-balance">Loading...</h5>
+                        <small class="text-muted" id="card-gbp-status">-</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card metric-card border-info h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-sync card-icon text-info mb-2"></i>
+                        <h6 class="text-muted">USD &rarr; GBP</h6>
+                        <h5 id="card-exchange-rate">Loading...</h5>
+                        <button class="btn btn-sm btn-outline-info mt-1" onclick="refreshExchangeRate()"><i class="fas fa-sync"></i></button>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
 
-
-    <!-- Portfolio Breakdown -->
-    {% if portfolio %}
-    <div class="row mb-4">
-        <div class="col-md-12">
-            <div class="card">
-                <div class="card-header">
-                    <h5><i class="fas fa-wallet"></i> Portfolio Breakdown ({{ display_currency }})</h5>
-                    <small class="text-muted">Individual account balances</small>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        {% for item in portfolio %}
-                        <div class="col-md-4 mb-3">
-                            <div class="card border-secondary">
-                                <div class="card-body text-center">
-                                    <h6 class="card-title">{{ item.currency }}</h6>
-                                    <div class="mb-2">
-                                        <small class="text-muted">Balance</small>
-                                        <div>{{ item.formatted_balance }}</div>
-                                    </div>
-                                    <div>
-                                        <small class="text-muted">Value</small>
-                                        <div class="fw-bold">{{ item.formatted_value }}</div>
-                                    </div>
-                                    {% if item.percentage > 0 %}
-                                    <div class="mt-2">
-                                        <div class="progress" style="height: 6px;">
-                                            <div class="progress-bar" style="width: {{ item.percentage }}%"></div>
-                                        </div>
-                                        <small class="text-muted">{{ "%.1f"|format(item.percentage) }}%</small>
-                                    </div>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
+        <!-- Risk Alert -->
+        <div class="row mb-3" id="risk-alert" style="display:none;">
+            <div class="col-12">
+                <div class="alert alert-danger alert-dismissible fade show">
+                    <h5><i class="fas fa-exclamation-triangle"></i> Risk Alert</h5>
+                    <p id="risk-alert-message"></p>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                 </div>
             </div>
         </div>
-    </div>
-    {% endif %}
 
-    <!-- Enhanced AI Models Grid -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <h3 class="mb-4"><i class="fas fa-brain"></i> AI Models <span
-                    class="badge bg-{{ 'success' if models_info and models_info.models_trained_count and models_info.models_trained_count > 0 else 'secondary' }}">{{
-                    models_info.models_trained_count }}</span></h3>
-
-            <div class="row">
-                <!-- Bitcoin Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-primary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0"><i class="fab fa-bitcoin"></i> Bitcoin Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.btc_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-primary">Bitcoin Specialist</h6>
-                            <p class="text-muted small">Analyzes BTC patterns, volatility, and trends</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.btc_model_ready else 'bg-warning' }}">{{
-                                    models_info.btc_model_status }}</span>
-                                <small class="text-muted">{{ models_info.btc_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.btc_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.btc_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.btc_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Ethereum Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-info">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0"><i class="fab fa-ethereum"></i> Ethereum Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.eth_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-info">Ethereum Specialist</h6>
-                            <p class="text-muted small">DeFi patterns, gas fees, and network effects</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.eth_model_ready else 'bg-warning' }}">{{
-                                    models_info.eth_model_status }}</span>
-                                <small class="text-muted">{{ models_info.eth_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.eth_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.eth_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.eth_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Altcoins Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-warning">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0"><i class="fas fa-coins"></i> Altcoins Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.alt_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-warning">Altcoins Specialist</h6>
-                            <p class="text-muted small">Diverse altcoin dynamics and patterns</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.alt_model_ready else 'bg-warning' }}">{{
-                                    models_info.alt_model_status }}</span>
-                                <small class="text-muted">{{ models_info.alt_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.alt_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.alt_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.alt_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- SOL Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-secondary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0"><i class="fas fa-sun text-purple"></i> SOL Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.sol_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-purple">Solana Specialist</h6>
-                            <p class="text-muted small">Analyzes SOL patterns, volatility, and trends</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.sol_model_ready else 'bg-warning' }}">{{
-                                    models_info.sol_model_status }}</span>
-                                <small class="text-muted">{{ models_info.sol_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.sol_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.sol_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.sol_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- DOT Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-secondary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">DOT Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.dot_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-secondary">Polkadot Specialist</h6>
-                            <p class="text-muted small">Analyzes DOT patterns, volatility, and trends</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.dot_model_ready else 'bg-warning' }}">{{
-                                    models_info.dot_model_status }}</span>
-                                <small class="text-muted">{{ models_info.dot_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.dot_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.dot_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.dot_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ADA Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-secondary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">ADA Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.ada_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-info">Cardano Specialist</h6>
-                            <p class="text-muted small">Analyzes ADA patterns, volatility, and trends</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.ada_model_ready else 'bg-warning' }}">{{
-                                    models_info.ada_model_status }}</span>
-                                <small class="text-muted">{{ models_info.ada_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.ada_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.ada_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.ada_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- LTC Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-secondary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">LTC Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.ltc_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-info">Litecoin Specialist</h6>
-                            <p class="text-muted small">Analyzes LTC patterns, volatility, and trends</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.ltc_model_ready else 'bg-warning' }}">{{
-                                    models_info.ltc_model_status }}</span>
-                                <small class="text-muted">{{ models_info.ltc_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.ltc_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.ltc_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.ltc_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- UNI Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-secondary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">UNI Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.uni_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-danger">Uniswap Specialist</h6>
-                            <p class="text-muted small">Analyzes UNI patterns, volatility, and trends</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.uni_model_ready else 'bg-warning' }}">{{
-                                    models_info.uni_model_status }}</span>
-                                <small class="text-muted">{{ models_info.uni_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.uni_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.uni_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.uni_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- LINK Model -->
-                <div class="col-md-4 mb-3">
-                    <div class="card h-100 border-secondary">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">LINK Model</h5>
-                            <div
-                                class="status-indicator {{ 'status-online' if models_info.link_model_ready else 'status-warning' }}">
-                            </div>
-                        </div>
-                        <div class="card-body text-center">
-                            <h6 class="text-primary">Chainlink Specialist</h6>
-                            <p class="text-muted small">Analyzes LINK patterns, volatility, and trends</p>
-                            <div class="mt-3">
-                                <span
-                                    class="badge {{ 'bg-success' if models_info.link_model_ready else 'bg-warning' }}">{{
-                                    models_info.link_model_status }}</span>
-                                <small class="text-muted">{{ models_info.link_model_trained_on }}</small>
-                            </div>
-                            <div class="progress mt-2" style="height: 8px;">
-                                <div class="progress-bar {{ 'bg-success' if models_info.link_model_ready else 'bg-warning' }}"
-                                    style="width: {{ models_info.link_model_progress }}%"></div>
-                            </div>
-                            <p class="mt-2 small text-muted">Accuracy: {{ models_info.link_model_accuracy }}%</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Current Prices & Quick Actions -->
-    <div class="row mb-4">
-        <div class="col-md-12">
-            <h4>Current Prices <span class="badge bg-info">Live</span></h4>
-            <div class="row">
-                {% for pair in current_prices %}
-                <div class="col-md-2 col-sm-4 mb-2">
-                    <div class="card">
-                        <div class="card-header">
-                            {{ pair }}
-                        </div>
-                        <div class="card-body">
-
-                            {{ formatted_current_prices[pair] }}
-
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-    </div>
-    <div class="card-body">
-        <div class="row">
-            {% for product_id, price in current_prices.items() %}
-            <div class="col-md-6 mb-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <strong>{{ product_id }}</strong>
-                    <span class="badge bg-primary">{{ formatted_current_prices[product_id] }}</span>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    </div>
-
-    <div class="col-md-4">
-        <div class="card">
+        <!-- Market Conditions & AI Signals -->
+        <div class="card mb-3">
             <div class="card-header">
-                <h5><i class="fas fa-play-circle"></i> Quick Actions</h5>
+                <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Market Conditions & AI Signals</h5>
             </div>
             <div class="card-body">
-                <div class="d-grid gap-2">
-                    <div style="display: {{ 'none' if trading_active else 'inline-block' }};">
-                        <button class="btn btn-success" onclick="controlBot('start_trading')">
-                            <i class="fas fa-play"></i> Start Trading
-                        </button>
-                    </div>
-                    <div style="display: {{ 'inline-block' if trading_active else 'none' }};">
-                        <button class="btn btn-warning" onclick="controlBot('stop_trading')">
-                            <i class="fas fa-pause"></i> Stop Trading
-                        </button>
-                    </div>
-                    <button class="btn btn-danger" onclick="controlBot('emergency_stop')">
-                        <i class="fas fa-exclamation-triangle"></i> Emergency Stop
-                    </button>
-                    <button class="btn btn-info" onclick="controlBot('retrain_models')">
-                        <i class="fas fa-brain"></i> Retrain AI Models
-                    </button>
-                    <button class="btn btn-secondary" onclick="testFunctions()">
-                        <i class="fas fa-check"></i> Test JS
-                    </button>
+                <div class="row g-3" id="signals-grid">
+                    <!-- Signal cards will be inserted here -->
+                </div>
+                <div class="alert alert-info mt-3 mb-0">
+                    <h6><i class="fas fa-info-circle"></i> Trading Logic</h6>
+                    <ul class="mb-0 small">
+                        <li><strong>AI Signal:</strong> &ge; <span id="vote-threshold-display">75</span>% model agreement</li>
+                        <li><strong>Confidence:</strong> &ge; <span id="threshold-display">65</span>% probability threshold</li>
+                        <li><strong>Position Size:</strong> Max <span id="max-pos-display">0.5</span>% of portfolio</li>
+                        <li><strong>Check Interval:</strong> Every <span id="interval-display">45</span> minutes</li>
+                        <li><strong>Risk:</strong> Max 0.5% per trade, &pound;2 buffer maintained</li>
+                    </ul>
                 </div>
             </div>
         </div>
-    </div>
 
-
-    <!-- Recent Trades -->
-    <div class="row">
-        <div class="col-md-12">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5><i class="fas fa-history"></i> Recent Trades</h5>
-                    <a href="/trades" class="btn btn-sm btn-outline-primary">View All</a>
+        <!-- Open Positions -->
+        <div class="card mb-3">
+            <div class="card-header collapse-toggle" data-bs-toggle="collapse" data-bs-target="#positions-table" onclick="toggleChevron(this)">
+                <h5 class="mb-0"><i class="fas fa-list me-2"></i>Open Positions <span class="badge bg-primary ms-2" id="positions-count">0</span></h5>
+            </div>
+            <div class="collapse show" id="positions-table">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Product</th><th>Side</th><th>Size</th><th>Remaining</th><th>Entry</th><th>Avg Entry</th><th>Scale-In £</th><th>Current</th><th>P&L</th><th>Opened</th><th>Scale-In</th><th>Scale-Out</th><th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="positions-tbody">
+                            <tr><td colspan="10" class="text-center text-muted py-4">Loading...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
+            </div>
+        </div>
+
+        <!-- Recent Trades & Closed Positions Accordion -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <div class="collapse-toggle collapsed" data-bs-toggle="collapse" data-bs-target="#trades-accordion" onclick="toggleChevron(this)">
+                    <h5 class="mb-0"><i class="fas fa-history me-2"></i>Recent Trades <span class="badge bg-secondary ms-2" id="trades-count">0</span></h5>
+                </div>
+            </div>
+            <div class="collapse" id="trades-accordion">
                 <div class="card-body">
-                    {% if recent_trades %}
-                    <div class="table-responsive">
-                        <table class="table table-hover">
-                            <thead>
+                    <!-- Recent Trades Table -->
+                    <h6 class="text-muted mb-2"><i class="fas fa-clock me-1"></i> Recent Trades</h6>
+                    <div class="table-responsive mb-4">
+                        <table class="table table-sm table-hover mb-0">
+                            <thead class="table-light">
                                 <tr>
-                                    <th>Time</th>
-                                    <th>Product</th>
-                                    <th>Side</th>
-                                    <th>Size</th>
-                                    <th>Price</th>
-                                    <th>P&L</th>
-                                    <th>Status</th>
+                                    <th>Date</th><th>Time</th><th>Product</th><th>Side</th><th>Size</th><th>Price</th><th>P&L</th><th>Status</th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                {% for trade in recent_trades %}
-                                <tr>
-                                    <td>{{ trade.timestamp.strftime('%Y-%m-%d') }}<br><small class="text-muted">{{
-                                            trade.timestamp.strftime('%H:%M:%S') }}</small></td>
-                                    <td><strong>{{ trade.product_id }}</strong></td>
-                                    <td>
-                                        <span class="badge bg-{{ 'success' if trade.side == 'buy' else 'danger' }}">
-                                            {{ trade.side.upper() }}
-                                        </span>
-                                    </td>
-                                    <td>{{ "%.6f"|format(trade.size) }}</td>
-                                    <td>{{ trade.formatted_price }}</td>
-                                    <td
-                                        class="{{ 'pnl-positive' if trade.pnl and trade.pnl > 0 else 'pnl-negative' if trade.pnl and trade.pnl < 0 else 'pnl-neutral' }}">
-                                        {% if trade.pnl %}
-                                        {{ trade.formatted_pnl }}
-                                        {% else %}
-                                        -
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-secondary">{{ trade.status }}</span>
-                                    </td>
-                                </tr>
-                                {% endfor %}
+                            <tbody id="trades-tbody">
+                                <tr><td colspan="7" class="text-center text-muted py-3">Click to expand...</td></tr>
                             </tbody>
                         </table>
                     </div>
-                    {% else %}
-                    <p class="text-muted text-center py-4">
-                        <i class="fas fa-inbox fa-2x mb-3"></i><br>
-                        No trades yet. The bot will start recording trades once it begins trading.
-                    </p>
-                    {% endif %}
+                    
+                    <!-- Closed Positions Table -->
+                    <h6 class="text-muted mb-2"><i class="fas fa-flag-checkered me-1"></i> Closed Positions</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Date</th><th>Product</th><th>Side</th><th>Size</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="closed-tbody">
+                                <tr><td colspan="8" class="text-center text-muted py-3">Click to expand...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-play-circle me-2"></i>Quick Actions</h5></div>
+            <div class="card-body">
+                <div class="d-grid gap-2 d-md-flex">
+                    <button class="btn btn-success" id="btn-start" onclick="controlBot('start')"><i class="fas fa-play me-1"></i>Start Trading</button>
+                    <button class="btn btn-warning" id="btn-stop" style="display:none;" onclick="controlBot('stop')"><i class="fas fa-pause me-1"></i>Stop Trading</button>
+                    <button class="btn btn-danger" onclick="controlBot('emergency_stop')"><i class="fas fa-exclamation-triangle me-1"></i>Emergency Stop</button>
+                    <button class="btn btn-info" onclick="retrainModels()"><i class="fas fa-brain me-1"></i>Retrain AI Models</button>
                 </div>
             </div>
         </div>
     </div>
 
-
-    <!-- Custom JavaScript (loaded in head for immediate availability) -->
-    <script>
-        // Simple dashboard JavaScript - essential functions only
-
-        // Debounce mechanism to prevent rapid repeated calls
-        let isProcessing = false;
-        const debounceTime = 2000; // 2 seconds between similar actions
-        let lastAction = '';
-        let lastActionTime = 0;
-
-        function debounceAction(action) {
-            const now = Date.now();
-            if (isProcessing && action === lastAction && (now - lastActionTime) < debounceTime) {
-                console.log('Action debounced:', action);
-                return false;
-            }
-            lastAction = action;
-            lastActionTime = now;
-            return true;
-        }
-        window.controlBot = function (action) {
-            console.log('Control bot called with action:', action);
-
-            // Prevent rapid repeated actions
-            if (!debounceAction(action)) {
-                try {
-                    if (window.showNotification) {
-                        window.showNotification('Please wait before repeating this action', 'warning');
-                    }
-                } catch (error) {
-                    console.error('Error showing wait notification:', error);
-                    alert('Please wait before repeating this action'); // Fallback
-                }
-                return;
-            }
-
-            let confirmMessage = '';
-            switch (action) {
-                case 'start_trading':
-                    confirmMessage = 'Are you sure you want to start automated trading?';
-                    break;
-                case 'stop_trading':
-                    confirmMessage = 'Are you sure you want to stop automated trading?';
-                    break;
-                case 'emergency_stop':
-                    confirmMessage = 'EMERGENCY STOP: This will immediately stop all trading!';
-                    break;
-                default:
-                    confirmMessage = 'Are you sure you want to ' + action.replace('_', ' ') + '?';
-            }
-
-            if (confirm(confirmMessage)) {
-                // Set processing state
-                isProcessing = true;
-
-                // Show immediate loading state
-                try {
-                    if (window.showNotification) {
-                        window.showNotification(`Processing ${action.replace('_', ' ')}...`, 'info');
-                    }
-                } catch (error) {
-                    console.error('Error showing processing notification:', error);
-                    alert(`Processing ${action.replace('_', ' ')}...`); // Fallback
-                }
-
-                fetch('/api/control/' + action, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                })
-                    .then(response => response.json())
-                    .then(data => {
-                        console.log('Action completed:', action, data);
-                        if (data.status === 'success') {
-                            if (action === 'retrain_models') {
-                                try {
-                                    if (window.showNotification) {
-                                        const successCount = data.details ? Object.values(data.details).filter(r => r.success).length : 0;
-                                        const totalCount = data.details ? Object.keys(data.details).length : 0;
-                                        window.showNotification(`Models trained: ${successCount}/${totalCount} successful`, 'success');
-                                    }
-                                } catch (error) {
-                                    console.error('Error showing retrain notification:', error);
-                                    alert('Models training completed'); // Fallback
-                                }
-                                setTimeout(() => location.reload(), 2000);
-                                return;
-                            }
-
-                            // Show success notification instead of alert
-                            try {
-                                if (window.showNotification) {
-                                    window.showNotification(data.message || 'Success!', 'success');
-                                }
-                            } catch (error) {
-                                console.error('Error showing success notification:', error);
-                                alert(data.message || 'Success!'); // Fallback
-                            }
-
-                            // Refresh trading status immediately for start/stop actions
-                            if (action === 'start_trading' || action === 'stop_trading') {
-                                // Update status immediately from response if available
-                                if (data.trading_active !== undefined) {
-                                    updateTradingStatus(data.trading_active);
-                                } else {
-                                    // Fallback to API call
-                                    updateTradingStatusFromAPI();
-                                }
-                            }
-                        } else {
-                            if (window.showNotification) {
-                                showNotification(data.message || 'Failed', 'danger');
-                            } else {
-                                alert(data.message || 'Failed');
-                            }
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Network error:', error);
-                        if (window.showNotification) {
-                            showNotification('Network error occurred', 'danger');
-                        } else {
-                            alert('Network error occurred');
-                        }
-                    })
-                    .finally(() => {
-                        // Clear processing state
-                        isProcessing = false;
-                    });
-            }
-        };
-
-        console.log('Dashboard loaded - controlBot available:', typeof window.controlBot);
-    </script>
-
-    // Update portfolio values immediately on page load and every 30 seconds
-
-
-    window.updateTradingStatus = function(isActive) {
-    console.log('updateTradingStatus called with:', isActive);
-
-    // Update trading activity badge in navbar
-    const activityBadge = document.getElementById('tradingActivityBadge');
-    if (activityBadge) {
-    if (isActive) {
-    activityBadge.className = 'badge bg-success me-2';
-    activityBadge.innerHTML = '<i class="fas fa-play-circle"></i> TRADING';
-    } else {
-    activityBadge.className = 'badge bg-secondary me-2';
-    activityBadge.innerHTML = '<i class="fas fa-pause-circle"></i> STOPPED';
-    }
-    }
-
-    // Update button states - show/hide based on status
-    const startBtn = document.querySelector('button[onclick*="start_trading"]');
-    const stopBtn = document.querySelector('button[onclick*="stop_trading"]');
-
-    if (startBtn) {
-    startBtn.parentElement.style.display = isActive ? 'none' : 'inline-block';
-    }
-    if (stopBtn) {
-    stopBtn.parentElement.style.display = isActive ? 'inline-block' : 'none';
-    }
-
-    // Show notification for status change
-    if (window.showNotification) {
-    const message = isActive ? 'Trading started successfully' : 'Trading stopped';
-    const type = isActive ? 'success' : 'warning';
-    showNotification(message, type);
-    }
-    };
-
-    // Function to update trading status from API - made globally accessible
-    window.updateTradingStatusFromAPI = async function() {
-    try {
-    const response = await fetch('/api/status');
-    const data = await response.json();
-    if (data.trading && data.trading.active !== undefined) {
-    updateTradingStatus(data.trading.active);
-    } else if (data.trading_active !== undefined) {
-    updateTradingStatus(data.trading_active);
-    }
-    } catch (error) {
-    console.error('Failed to fetch trading status:', error);
-    }
-    };
-
-    // Update status on page load and every 30 seconds
-    document.addEventListener('DOMContentLoaded', function() {
-    updateTradingStatusFromAPI();
-    });
-    setInterval(updateTradingStatusFromAPI, 30000);
-
-    window.showNotification = function(message, type) {
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.className = 'alert alert-' + type + ' alert-dismissible fade show position-fixed mt-3';
-    notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
-    // Safe HTML construction - escape message content to prevent syntax errors
-    const safeMessage = String(message).replace(/</g, '&lt;' ).replace( />/g, '&gt;');
-    notification.innerHTML = safeMessage +
-    '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
-    document.body.appendChild(notification);
-
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-    if (notification.parentNode) {
-    notification.parentNode.removeChild(notification);
-    }
-    }, 3000);
-    };
-
-    // Test function for debugging JavaScript functionality
-    window.testFunctions = function() {
-    console.log('=== JavaScript Function Test ===');
-    console.log('controlBot:', typeof window.controlBot);
-    console.log('updateTradingStatus:', typeof window.updateTradingStatus);
-    console.log('updateTradingStatusFromAPI:', typeof window.updateTradingStatusFromAPI);
-    console.log('showNotification:', typeof window.showNotification);
-    console.log('changeCurrency:', typeof window.changeCurrency);
-    console.log('updateExchangeRate:', typeof window.updateExchangeRate);
-
-    // Test trading status update
-    if (window.showNotification) {
-    showNotification('JavaScript test successful!', 'success');
-    }
-
-    // Test API connection
-    fetch('/api/status')
-    .then(response => response.json())
-    .then(data => {
-    console.log('API Status Test:', data);
-    if (window.showNotification) {
-    showNotification('API connection working', 'info');
-    }
-    })
-    .catch(error => {
-    console.error('API Test Error:', error);
-    if (window.showNotification) {
-    showNotification('API connection failed', 'danger');
-    }
-    });
-    };
-
-    console.log('✅ JavaScript loading completed - controlBot available:', typeof window.controlBot);
-    console.log('✅ updateTradingStatusFromAPI available:', typeof window.updateTradingStatusFromAPI);
-    console.log('✅ testFunctions available:', typeof window.testFunctions);
-    </script>
-
-    <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-
-        // Control bot functions
-        window.controlBot = async function (action) {
-            try {
-                const response = await fetch(`/api/control/${action}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
-                });
-                const result = await response.json();
-                if (result.success) {
-                    console.log(`✅ ${action} successful:`, result.message);
-                    if (action === 'retrain_models') {
-                        // Refresh page after retraining
-                        window.location.reload();
-                    }
-                } else {
-                    console.error(`❌ ${action} failed:`, result.message);
-                }
-            } catch (error) {
-                console.error(`❌ Control bot error:`, error);
-            }
+        const API = {
+            status: '/api/status',
+            summary: '/api/portfolio/summary',
+            signals: '/api/market/conditions',
+            positions: '/api/open_positions',
+            closed: '/api/closed_positions',
+            trades: '/api/recent_trades',
+            models: '/api/models/status',
+            exchange: '/api/exchange_rate',
+            risk: '/api/risk/status',
+            control: '/api/control',
+            countdown: '/api/countdown',
+            gbpBalance: '/api/gbp-balance'
         };
 
+        const INTERVALS = { summary: 30000, signals: 60000, positions: 30000, countdown: 5000, gbp: 30000 };
+        let state = { tradingActive: false, currency: 'GBP' };
+        let tradesLoaded = false;
 
+        async function fetchJSON(url) {
+            try { const r = await fetch(url); return r.ok ? await r.json() : null; } catch { return null; }
+        }
+
+        function showToast(msg, type = 'info') {
+            const c = document.getElementById('toast-container');
+            const id = 't' + Date.now();
+            c.innerHTML += `<div class="toast" id="${id}"><div class="toast-body">${msg}</div></div>`;
+            new bootstrap.Toast(document.getElementById(id)).show();
+        }
+
+        function toggleChevron(el) { el.classList.toggle('collapsed'); }
+
+        async function changeCurrency(c) {
+            state.currency = c;
+            showToast(`Currency: ${c}`, 'success');
+            await Promise.all([updateStatus(), updateSummary(), updateSignals()]);
+        }
+
+        async function refreshExchangeRate() {
+            const d = await fetchJSON(API.exchange);
+            if (d?.status === 'success') document.getElementById('card-exchange-rate').textContent = d.exchange_rate;
+            showToast('Exchange rate refreshed', 'success');
+        }
+
+        function updateTradingUI() {
+            const badge = document.getElementById('trading-status-badge');
+            const btnS = document.getElementById('btn-start');
+            const btnSt = document.getElementById('btn-stop');
+            if (state.tradingActive) {
+                badge.className = 'badge bg-success me-2'; badge.innerHTML = '<i class="fas fa-play-circle me-1"></i>ACTIVE';
+                btnS.style.display = 'none'; btnSt.style.display = 'inline-block';
+            } else {
+                badge.className = 'badge bg-secondary me-2'; badge.innerHTML = '<i class="fas fa-pause-circle me-1"></i>STOPPED';
+                btnS.style.display = 'inline-block'; btnSt.style.display = 'none';
+            }
+        }
+
+        async function controlBot(action) {
+            const btn = document.activeElement;
+            const orig = btn?.innerHTML || '';
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+            try {
+                const r = await fetch(`${API.control}/${action}`, { method: 'POST' });
+                const d = await r.json();
+                if (d.status === 'success') {
+                    state.tradingActive = d.trading_active;
+                    updateTradingUI();
+                    showToast(d.message || `Action: ${action}`, 'success');
+                } else showToast(d.message || 'Failed', 'danger');
+            } catch { showToast('Request failed', 'danger'); }
+            finally { if (btn) { btn.disabled = false; btn.innerHTML = orig; } }
+        }
+
+        async function retrainModels() {
+            showToast('Retraining models...', 'info');
+            await controlBot('retrain');
+        }
+
+        async function closePosition(id, pair) {
+            if (!confirm(`Close ${pair}?`)) return;
+            try {
+                const r = await fetch(`/api/position/${id}/close`, { method: 'POST' });
+                const d = await r.json();
+                if (d.status === 'success') { showToast(`${pair} closed`, 'success'); updatePositions(); }
+                else showToast(d.message || 'Failed', 'danger');
+            } catch { showToast('Failed', 'danger'); }
+        }
+
+        async function updateStatus() {
+            const d = await fetchJSON(API.status);
+            if (!d) return;
+            state.tradingActive = d.trading_active;
+            updateTradingUI();
+            const mode = document.getElementById('mode-badge');
+            mode.className = `badge ${d.paper_trading ? 'bg-success' : 'bg-danger'}`;
+            mode.textContent = d.paper_trading ? 'PAPER' : 'LIVE';
+        }
+
+        async function updateSummary() {
+            const d = await fetchJSON(API.summary);
+            if (!d || d.status !== 'success') return;
+
+            document.getElementById('card-portfolio-value').textContent = d.formatted_total_value || 'N/A';
+            
+            const dp = document.getElementById('card-daily-pnl');
+            const dpC = document.getElementById('card-daily-pnl-container');
+            const dpi = document.getElementById('daily-pnl-icon');
+            dp.textContent = d.formatted_daily_pnl || '£0.00';
+            const dpv = d.daily_pnl >= 0;
+            dp.className = dpv ? 'pnl-positive' : 'pnl-negative';
+            dpC.className = `card metric-card h-100 border-${dpv ? 'success' : 'danger'}`;
+            dpi.className = `fas fa-arrow-${dpv ? 'up' : 'down'} card-icon mb-2 ${dpv ? 'text-success' : 'text-danger'}`;
+
+            document.getElementById('card-ai-models').textContent = `${d.models_trained || 0} models`;
+            document.getElementById('card-win-rate').textContent = `${d.win_rate || 0}%`;
+            document.getElementById('card-total-trades').textContent = `${d.total_trades || 0} trades`;
+
+            const tp = document.getElementById('card-total-pnl');
+            const tpC = document.getElementById('card-total-pnl-container');
+            const tpi = document.getElementById('total-pnl-icon');
+            // Use realized_pnl from Coinbase (source of truth)
+            const rpnl = d.realized_pnl !== undefined ? d.realized_pnl : d.total_pnl;
+            const rp_formatted = d.realized_pnl_formatted || d.formatted_total_pnl;
+            tp.textContent = rp_formatted || '£0.00';
+            const tpv = rpnl >= 0;
+            tp.className = tpv ? 'pnl-positive' : 'pnl-negative';
+            tpC.className = `card metric-card h-100 border-${tpv ? 'success' : 'danger'}`;
+            tpi.className = `fas fa-coins card-icon mb-2 ${tpv ? 'text-success' : 'text-danger'}`;
+            
+            // Show Coinbase trade count
+            document.getElementById('card-trade-count').textContent = `${d.coinbase_trade_count || 0} Coinbase trades`;
+
+            document.getElementById('card-active-positions').textContent = `${d.open_positions || 0}/${d.max_positions || 8}`;
+            document.getElementById('card-exchange-rate').textContent = d.exchange_rate || '0.75';
+
+            // Risk
+            const rs = d.risk_status || 'low';
+            const rsi = document.getElementById('risk-icon');
+            const rsc = document.getElementById('card-risk-container');
+            document.getElementById('card-risk-status').textContent = rs.toUpperCase();
+            rsi.className = `fas fa-shield-alt card-icon mb-2 text-${rs === 'critical' ? 'danger' : rs === 'warning' ? 'warning' : 'success'}`;
+            rsc.className = `card metric-card h-100 border-${rs === 'critical' ? 'danger' : rs === 'warning' ? 'warning' : 'success'}`;
+
+            // Risk alert
+            const alert = document.getElementById('risk-alert');
+            if (rs !== 'low') {
+                alert.style.display = 'block';
+                document.getElementById('risk-alert-message').textContent = rs === 'critical' ? 
+                    `GBP balance critical: £${d.gbp_balance?.toFixed(2)} below £2.00` :
+                    `GBP balance low: £${d.gbp_balance?.toFixed(2)} below £5.00`;
+            } else alert.style.display = 'none';
+
+            // Trading logic dynamic values
+            document.getElementById('vote-threshold-display').textContent = d.vote_threshold || 75;
+            document.getElementById('threshold-display').textContent = d.confidence_threshold || 65;
+            document.getElementById('max-pos-display').textContent = d.max_position_size || 0.5;
+            document.getElementById('interval-display').textContent = d.interval_minutes || 45;
+        }
+
+        async function updateGbpBalance() {
+            const d = await fetchJSON(API.gbpBalance);
+            if (!d || d.gbp_balance === undefined) return;
+            
+            const el = document.getElementById('card-gbp-balance');
+            const statusEl = document.getElementById('card-gbp-status');
+            const container = document.getElementById('card-gbp-container');
+            
+            el.textContent = d.formatted_balance || `£${d.gbp_balance?.toFixed(2) || '0.00'}`;
+            
+            const status = d.status || 'normal';
+            statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+            
+            if (status === 'critical') {
+                el.className = 'text-danger';
+                container.className = 'card metric-card border-danger h-100';
+            } else if (status === 'warning') {
+                el.className = 'text-warning';
+                container.className = 'card metric-card border-warning h-100';
+            } else {
+                el.className = 'text-success';
+                container.className = 'card metric-card border-success h-100';
+            }
+        }
+
+        async function updateSignals() {
+            const d = await fetchJSON(API.signals);
+            const grid = document.getElementById('signals-grid');
+            
+            if (!d || d.status !== 'success') { grid.innerHTML = '<div class="col-12 text-center text-muted py-4">Loading...</div>'; return; }
+
+            const conds = d.conditions || {};
+            grid.innerHTML = '';
+
+            const icons = { BTC: 'fab fa-bitcoin text-warning', ETH: 'fab fa-ethereum text-primary', SOL: 'fas fa-sun text-info', LTC: 'fas fa-litecoin text-secondary', DOT: 'fas fa-circle text-info', ADA: 'fas fa-cardano-alt text-primary', LINK: 'fas fa-link text-info', UNI: 'fas fa-university text-primary' };
+
+            for (const [pid, info] of Object.entries(conds)) {
+                const sym = pid.split('-')[0];
+                const sig = info.signal || 'HOLD';
+                const cls = sig === 'BUY' ? 'signal-buy' : sig === 'SELL' ? 'signal-sell' : 'signal-hold';
+                const bdg = sig === 'BUY' ? 'success' : sig === 'SELL' ? 'danger' : 'secondary';
+                const conf = (info.confidence !== undefined && info.confidence !== null) ? Math.round(info.confidence) : 0;
+                const isTrade = sig === 'BUY' || sig === 'SELL';
+                const meets = isTrade && conf >= 60;
+                const bal = info.crypto_balance;
+                const balDisplay = bal ? `<small class="text-muted">Hold:</small> ${bal.balance?.toFixed(6)} <small class="text-muted">£${bal.value?.toFixed(2)}</small>` : '<small class="text-muted">No holding</small>';
+
+                grid.innerHTML += `
+                <div class="col-md-3">
+                    <div class="card signal-card ${cls}">
+                        <div class="card-body py-2">
+                            <h6><i class="${icons[sym] || 'fas fa-coins'} me-1"></i>${pid}</h6>
+                            <h4 class="text-primary">${info.formatted_price || 'N/A'}</h4>
+                            <div class="mb-2">
+                                <span class="badge bg-${bdg}">${sig}</span>
+                                <span class="badge bg-${meets ? 'success' : 'secondary'}">${meets ? 'TRADE' : 'WAIT'}</span>
+                            </div>
+                            <div class="progress mb-1" style="height:8px;">
+                                <div class="progress-bar bg-${bdg}" style="width:${conf}%"></div>
+                            </div>
+                            <small class="text-muted">${conf}% Conf | ${info.agreement || 0}% Agmt</small>
+                            ${info.threshold_reason ? '<small class="text-success d-block">' + info.threshold_reason + '</small>' : ''}
+                            <div class="mt-2 small">${balDisplay}</div>
+                            <div class="small text-muted"><i class="fas fa-chart-line me-1"></i>${info.regime || 'neutral'}</div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+        }
+
+        async function updatePositions() {
+            const d = await fetchJSON(API.positions);
+            const tbody = document.getElementById('positions-tbody');
+            const cnt = document.getElementById('positions-count');
+            if (!d || d.status !== 'success' || !d.positions?.length) { tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No open positions</td></tr>'; cnt.textContent = '0'; return; }
+            cnt.textContent = d.count;
+            tbody.innerHTML = d.positions.map(p => `
+                <!-- Main Position Row -->
+                <tr class="position-row">
+                    <td><strong>${p.product_id}</strong></td>
+                    <td><span class="badge bg-${p.side === 'BUY' ? 'success' : 'danger'}">${p.side}</span></td>
+                    <td>${p.size}</td>
+                    <td>${p.remaining_size || p.size}</td>
+                    <td>£${p.original_entry_price?.toLocaleString()}</td>
+                    <td>£${p.entry_price?.toLocaleString()}</td>
+                    <td>${p.scale_in_price ? '£' + p.scale_in_price.toLocaleString() : '-'}</td>
+                    <td class="current-price">£${p.current_price?.toLocaleString()} ${p.price_direction === 'up' ? '▲' : p.price_direction === 'down' ? '▼' : ''}</td>
+                    <td class="${p.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}"><strong>${p.formatted_pnl}</strong> ${p.price_direction === 'up' ? '▲' : p.price_direction === 'down' ? '▼' : ''} ${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</td>
+                    <td>${p.opened_at ? p.opened_at.replace('T', ' ').substring(0, 16) : '-'}</td>
+                    <td><span class="badge bg-${p.scale_in_count > 0 ? 'warning' : 'secondary'}">${p.scale_in_count || 0}</span></td>
+                    <td><button class="btn btn-outline-danger btn-sm" onclick="closePosition('${p.position_id}', '${p.product_id}')"><i class="fas fa-times"></i></button></td>
+                </tr>
+                <!-- Trailing Stop Details Row -->
+                <tr class="trailing-stop-row">
+                    <td>↳ ${p.product_id}</td>
+                    <td colspan="4">BE: £${p.break_even?.toLocaleString()} | <strong>Stop: £${p.trailing_stop?.toLocaleString()}</strong></td>
+                    <td>Peak: £${p.peak_price?.toLocaleString()}</td>
+                    <td>Floor: £${p.stop_floor?.toLocaleString()}</td>
+                    <td><span class="badge bg-${p.trailing_activated ? 'success' : 'secondary'}">${p.trailing_activated ? 'Active' : 'Pending'}</span></td>
+                    <td><span class="badge bg-info">${p.regime || 'neutral'}</span></td>
+                    <td colspan="2"></td>
+                </tr>`).join('');
+        }
+
+        async function updateTrades() {
+            const d = await fetchJSON(API.trades + '?limit=20');
+            const tbody = document.getElementById('trades-tbody');
+            const cnt = document.getElementById('trades-count');
+            if (!d || d.status !== 'success' || !d.trades?.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">No recent trades</td></tr>'; cnt.textContent = '0'; return; }
+            cnt.textContent = d.count;
+            tbody.innerHTML = d.trades.map(t => `
+                <tr>
+                    <td>${t.date || '-'}</td>
+                    <td>${t.timestamp}</td>
+                    <td><strong>${t.product_id}</strong></td>
+                    <td><span class="badge bg-${t.side === 'BUY' ? 'success' : 'danger'}">${t.side}</span></td>
+                    <td>${t.size}</td>
+                    <td>${t.formatted_price}</td>
+                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl >= 0 ? '▲' : '▼'} ${t.formatted_pnl}</td>
+                    <td><span class="badge bg-secondary">${t.status}</span></td>
+                </tr>`).join('');
+        }
+
+        async function updateClosedPositions() {
+            const d = await fetchJSON(API.closed + '?limit=20');
+            const tbody = document.getElementById('closed-tbody');
+            if (!d || d.status !== 'success' || !d.positions?.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No closed positions</td></tr>'; return; }
+            tbody.innerHTML = d.positions.map(p => `
+                <tr>
+                    <td>${p.date || '-'}</td>
+                    <td><strong>${p.product_id}</strong></td>
+                    <td><span class="badge bg-${p.side === 'BUY' ? 'success' : 'danger'}">${p.side}</span></td>
+                    <td>${p.size}</td>
+                    <td>£${p.entry_price?.toLocaleString()}</td>
+                    <td>£${p.exit_price?.toLocaleString()}</td>
+                    <td class="${p.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${p.pnl >= 0 ? '▲' : '▼'} ${p.formatted_pnl}</td>
+                    <td><span class="badge bg-secondary">${p.status}</span></td>
+                </tr>`).join('');
+        }
+
+        async function updateCountdown() {
+            const d = await fetchJSON(API.countdown);
+            if (!d) return;
+            
+            const countdownEl = document.getElementById('card-countdown');
+            const lastCycleEl = document.getElementById('card-last-cycle');
+            
+            if (d.trading_active) {
+                if (d.remaining_seconds <= 0) {
+                    countdownEl.textContent = 'OVERDUE';
+                    countdownEl.className = 'text-danger';
+                } else {
+                    const m = Math.floor(d.remaining_seconds / 60);
+                    const s = d.remaining_seconds % 60;
+                    countdownEl.textContent = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                    countdownEl.className = 'text-success';
+                }
+            } else {
+                countdownEl.textContent = 'PAUSED';
+                countdownEl.className = 'text-warning';
+            }
+            
+            if (d.last_cycle_time) {
+                lastCycleEl.textContent = `Last: ${d.last_cycle_time}`;
+            }
+        }
+
+        async function init() {
+            await Promise.all([updateStatus(), updateSummary(), updateSignals(), updatePositions(), updateGbpBalance(), updateCountdown()]);
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
+
+        document.getElementById('trades-accordion').addEventListener('shown.bs.collapse', () => { 
+            if (!tradesLoaded) { 
+                updateTrades(); 
+                updateClosedPositions();
+                tradesLoaded = true; 
+            } 
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            init();
+            setInterval(updateSummary, INTERVALS.summary);
+            setInterval(updateSignals, INTERVALS.signals);
+            setInterval(updatePositions, INTERVALS.positions);
+            setInterval(updateCountdown, INTERVALS.countdown);
+            setInterval(updateGbpBalance, INTERVALS.gbp);
+        });
     </script>
 </body>
-
 </html>

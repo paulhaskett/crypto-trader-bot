@@ -19,7 +19,7 @@ import time
 import threading
 import os
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 # Import our modules
 from config.settings import settings
@@ -124,7 +124,7 @@ class UnifiedBot:
             self.broadcast_status({
                 "type": "status_update",
                 "trading_active": True,
-                "paper_trading": trading_engine.paper_trading,
+                "paper_trading": db_manager.get_paper_trading(),
                 "message": "Trading engine started"
             })
 
@@ -164,7 +164,7 @@ class UnifiedBot:
             self.broadcast_status({
                 "type": "status_update",
                 "trading_active": True,
-                "paper_trading": trading_engine.paper_trading,
+                "paper_trading": db_manager.get_paper_trading(),
                 "message": "Trading engine started"
             })
 
@@ -189,22 +189,46 @@ class UnifiedBot:
         self.broadcast_status({
             "type": "status_update",
             "trading_active": False,
-            "paper_trading": trading_engine.paper_trading,
+            "paper_trading": db_manager.get_paper_trading(),
             "message": "Trading engine stopped"
         })
 
         return True
 
     def _trading_loop(self):
-        """Main trading loop that runs continuously."""
+        """Main trading loop that runs continuously with timeout protection."""
         logger.info("Trading loop started")
+        cycle_timeout = 300  # 5 minutes max per cycle
 
         while not self.shutdown_event.is_set():
             try:
                 if self.trading_active:
                     logger.info("Starting new trading cycle...")
-                    # Run one trading cycle
-                    cycle_results = trading_engine.run_trading_cycle()
+                    cycle_start_time = time.time()
+
+                    # Run one trading cycle with timeout
+                    try:
+                        cycle_results = trading_engine.run_trading_cycle(cycle_timeout=cycle_timeout)
+                    except Exception as cycle_error:
+                        logger.error(f"Trading cycle failed: {cycle_error}")
+                        cycle_results = {
+                            'signals_found': 0,
+                            'trades_executed': 0,
+                            'positions_closed': 0,
+                            'total_pnl': 0.0,
+                            'error': str(cycle_error)
+                        }
+
+                    cycle_time = time.time() - cycle_start_time
+
+                    # Check for cycle timeout
+                    if cycle_time > cycle_timeout:
+                        logger.error(f"CYCLE TIMEOUT: Cycle took {cycle_time:.1f}s (> {cycle_timeout}s)")
+                        self.broadcast_status({
+                            "type": "error",
+                            "message": f"Cycle timeout after {cycle_time:.1f}s - possible hang detected",
+                            "trading_active": self.trading_active
+                        })
 
                     # Broadcast results to dashboard
                     status_update = {
@@ -214,8 +238,9 @@ class UnifiedBot:
                         "trades_executed": cycle_results.get('trades_executed', 0),
                         "positions_closed": cycle_results.get('positions_closed', 0),
                         "total_pnl": cycle_results.get('total_pnl', 0.0),
+                        "cycle_time": cycle_time,
                         "trading_active": self.trading_active,
-                        "paper_trading": trading_engine.paper_trading
+                        "paper_trading": db_manager.get_paper_trading()
                     }
 
                     # Add current portfolio status
@@ -227,11 +252,11 @@ class UnifiedBot:
                     })
 
                     self.broadcast_status(status_update)
-                    
+
                     # Update cycle timing for countdown
                     self.last_cycle_time = time.time()
                     self.cycle_count += 1
-                    logger.debug(f"Cycle #{self.cycle_count} completed at {self.last_cycle_time}")
+                    logger.info(f"Cycle #{self.cycle_count} completed in {cycle_time:.1f}s at {self.last_cycle_time}")
 
                 # Sleep between cycles
                 logger.debug(f"Sleeping for {settings.MARKET_CHECK_INTERVAL} seconds...")
@@ -257,12 +282,12 @@ class UnifiedBot:
             
             return {
                 "trading_active": self.trading_active,
-                "paper_trading": trading_engine.paper_trading,
+                "paper_trading": db_manager.get_paper_trading(),
                 "portfolio_value": portfolio_data.get('portfolio_value', 0),
                 "daily_pnl": portfolio_data.get('daily_pnl', 0),
                 "risk_status": portfolio_data.get('risk_status', 'normal'),
                 "active_positions": engine_status.get('active_positions', 0),
-                "models_trained": len(model_status.get('models_trained', [])),
+                "models_trained": model_status.get('models_trained', []),
                 "listeners_connected": len(self.status_listeners),
             }
         """Get current bot status."""
@@ -277,12 +302,12 @@ class UnifiedBot:
 
         return {
             "trading_active": self.trading_active,
-            "paper_trading": trading_engine.paper_trading,
+            "paper_trading": db_manager.get_paper_trading(),
             "portfolio_value": portfolio_data.get('portfolio_value', 0),
             "daily_pnl": portfolio_data.get('daily_pnl', 0),
             "risk_status": portfolio_data.get('risk_status', 'unknown'),
             "active_positions": engine_status.get('active_positions', 0),
-            "models_trained": len(model_status.get('models_trained', [])),
+            "models_trained": model_status.get('models_trained', []),
             "listeners_connected": len(self.status_listeners),
             "base_currency": self.base_currency,
             "display_currency": self.display_currency,
@@ -325,7 +350,7 @@ class UnifiedBot:
             logger.error(f"Error setting base currency: {e}")
             return False
 
-    def set_display_currency(self, currency: str) -> bool:
+    async def set_display_currency(self, currency: str) -> bool:
         """Set the display currency for the dashboard."""
         if currency not in ['USD', 'GBP']:
             logger.error(f"Invalid display currency: {currency}")
@@ -333,30 +358,29 @@ class UnifiedBot:
         
         try:
             self.display_currency = currency
+            logger.info(f"Attempting to save display_currency={currency} to database...")
             success = db_manager.save_user_setting('display_currency', currency)
+            logger.info(f"Database save result: {success}")
             
             if success:
-                await self.broadcast_status({
+                # Force a commit and verify the save
+                saved_value = db_manager.get_user_setting('display_currency', None)
+                logger.info(f"Verified save - read back from DB: {saved_value}")
+                
+                self.broadcast_status({
                     "type": "currency_change",
                     "base_currency": self.base_currency,
                     "display_currency": currency
                 })
-                
-                # Update trading engine base currency
-                try:
-                    self.trading_engine.set_base_currency(self.base_currency)
-                    logger.info(f"Trading engine base currency updated to {self.base_currency}")
-                except Exception as e:
-                    logger.error(f"Failed to update trading engine base currency: {e}")
                 
                 # Update all ongoing USD conversion rates to new base currency
                 for usd_pair in settings.PRODUCT_IDS:
                     if '-GBP' not in usd_pair and usd_pair.replace('-', '') in settings.PRODUCT_IDS:
                         gbp_pair = f"{usd_pair.replace('-', '')}"
                         try:
-                            rate = await coinbase_api.get_product_ticker('GBP-USD')
+                            rate = coinbase_api.get_product_ticker('GBP-USD')
                             if rate and 'price' in rate:
-                                await self.save_setting(f"{gbp_pair}_exchange_rate", float(rate['price']))
+                                db_manager.save_user_setting(f"{gbp_pair}_exchange_rate", str(float(rate['price'])))
                                 logger.info(f"Updated {gbp_pair} exchange rate: {float(rate['price'])}")
                         except Exception as e:
                             logger.error(f"Failed to update {gbp_pair} exchange rate: {e}")
@@ -394,6 +418,16 @@ class UnifiedBot:
                 "display_currency": self.display_currency,
                 "error": str(e)
             }
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current bot status."""
+        return {
+            "trading_active": self.trading_active,
+            "trading_thread_alive": self.trading_thread.is_alive() if self.trading_thread else False,
+            "base_currency": self.base_currency,
+            "display_currency": self.display_currency,
+            "paper_trading": db_manager.get_paper_trading()
+        }
 
     def shutdown(self):
         """Shutdown the unified bot."""
@@ -668,12 +702,16 @@ def run_unified_dashboard():
             # Get portfolio data with currency conversion
             from src.currency_utils import currency_converter
 
-            # Get user's preferred display currency from unified bot
-            display_currency = unified_bot.display_currency
-            base_currency = unified_bot.base_currency
+            # Get user's preferred display currency from database (not in-memory cache)
+            display_currency = db_manager.get_user_setting('display_currency', 'GBP')
+            if display_currency is None:
+                display_currency = 'GBP'
+            base_currency = db_manager.get_user_setting('base_currency', 'GBP')
+            if base_currency is None:
+                base_currency = 'GBP'
 
             # Check trading mode to determine data source
-            if trading_engine.paper_trading:
+            if db_manager.get_paper_trading():
                 # Paper trading: show simulated portfolio
                 portfolio = [
                     {
@@ -758,9 +796,8 @@ def run_unified_dashboard():
                 # Now build portfolio with all currencies that have balances and prices
                 for account in accounts:
                     currency = account['currency']
-                    balance = account['available']
+                    balance = float(account.get('available', 0))
 
-                    # Skip zero balances
                     if balance <= 0:
                         continue
 
@@ -770,11 +807,21 @@ def run_unified_dashboard():
                     elif f"{currency}-USD" in current_prices:
                         price = current_prices[f"{currency}-USD"]
                         value_usd = balance * price
+                    elif f"{currency}-GBP" in current_prices:
+                        price = current_prices[f"{currency}-GBP"]
+                        gbp_to_usd = currency_converter.get_exchange_rate('GBP', 'USD') or 1.30
+                        value_usd = balance * price * gbp_to_usd
+                    elif currency == 'USDC':
+                        value_usd = balance
+                        price = 1.0
+                    elif currency == 'GBP':
+                        # GBP is the base currency - convert balance to USD for portfolio totals
+                        gbp_to_usd = currency_converter.get_exchange_rate('GBP', 'USD') or 1.30
+                        value_usd = balance * gbp_to_usd
+                        price = 1.0
                     else:
-                        # Skip currencies without valid prices
                         continue
 
-                    # Skip very small values
                     if value_usd < settings.MIN_PORTFOLIO_VALUE_DISPLAY:
                         continue
 
@@ -785,7 +832,8 @@ def run_unified_dashboard():
                         "balance": balance,
                         "price": price,
                         "value_usd": value_usd,
-                        "percentage": 0.0  # Will be calculated after total
+                        "gbp_value": currency_converter.convert_amount(value_usd, 'USD', 'GBP'),
+                        "percentage": 0.0
                     })
 
                 # Sort portfolio by value (highest first) and calculate percentages
@@ -814,6 +862,13 @@ def run_unified_dashboard():
             engine_status = trading_engine.get_status()
             model_status = ai_model.get_model_status()
 
+            # Sync trading_engine.active_positions with database for consistency
+            trading_engine.active_positions = db_manager.load_open_positions()
+            
+            # Get open positions count from database
+            open_positions = db_manager.get_all_open_positions_detailed()
+            open_positions_count = len(open_positions)
+
             # Get recent trades (last 10)
             recent_trades = db_manager.get_trades(limit=10)
 
@@ -821,7 +876,7 @@ def run_unified_dashboard():
             perf_summary = db_manager.get_performance_summary(days=30)
 
             # Get risk status
-            risk_data = risk_manager.check_portfolio_risk(trading_engine.paper_trading)
+            risk_data = risk_manager.check_portfolio_risk(db_manager.get_paper_trading())
 
             # Format additional currency values for template
             formatted_daily_pnl = currency_converter.format_currency(risk_data.get('daily_pnl', 0), display_currency)
@@ -988,6 +1043,7 @@ def run_unified_dashboard():
             exchange_rate_info = unified_bot.get_currency_info()
             
             context = {
+                "settings": settings,  # Add settings to template context
                 "portfolio": converted_portfolio,
                 "portfolio_value": total_value,
                 "formatted_total": formatted_total,
@@ -996,10 +1052,10 @@ def run_unified_dashboard():
                 "daily_pnl": risk_data.get('daily_pnl', 0),
                 "formatted_daily_pnl": formatted_daily_pnl,
                 "risk_status": risk_data.get('risk_status', 'unknown'),
-                "paper_trading": trading_engine.paper_trading,
+                "paper_trading": db_manager.get_paper_trading(),
                 "trading_active": trading_active,
-                "active_positions": engine_status.get('active_positions', 0),
-                "models_trained": len(model_status.get('models_trained', [])),
+                "active_positions": open_positions_count,
+                "models_trained": model_status.get('models_trained', []),
                 "current_prices": current_prices,
                 "formatted_current_prices": formatted_current_prices,
                 "recent_trades": formatted_recent_trades,
@@ -1026,6 +1082,36 @@ def run_unified_dashboard():
                     'eth_model_status': model_status.get('eth_model_status', 'not_started'),
                     'eth_model_trained_on': model_status.get('eth_model_trained_on', 'Not trained'),
                     'eth_model_progress': model_status.get('eth_model_progress', 0),
+                    'sol_model_ready': model_status.get('sol_model_ready', False),
+                    'sol_model_accuracy': model_status.get('sol_model_accuracy', 0),
+                    'sol_model_status': model_status.get('sol_model_status', 'not_started'),
+                    'sol_model_trained_on': model_status.get('sol_model_trained_on', 'Not trained'),
+                    'sol_model_progress': model_status.get('sol_model_progress', 0),
+                    'dot_model_ready': model_status.get('dot_model_ready', False),
+                    'dot_model_accuracy': model_status.get('dot_model_accuracy', 0),
+                    'dot_model_status': model_status.get('dot_model_status', 'not_started'),
+                    'dot_model_trained_on': model_status.get('dot_model_trained_on', 'Not trained'),
+                    'dot_model_progress': model_status.get('dot_model_progress', 0),
+                    'ada_model_ready': model_status.get('ada_model_ready', False),
+                    'ada_model_accuracy': model_status.get('ada_model_accuracy', 0),
+                    'ada_model_status': model_status.get('ada_model_status', 'not_started'),
+                    'ada_model_trained_on': model_status.get('ada_model_trained_on', 'Not trained'),
+                    'ada_model_progress': model_status.get('ada_model_progress', 0),
+                    'ltc_model_ready': model_status.get('ltc_model_ready', False),
+                    'ltc_model_accuracy': model_status.get('ltc_model_accuracy', 0),
+                    'ltc_model_status': model_status.get('ltc_model_status', 'not_started'),
+                    'ltc_model_trained_on': model_status.get('ltc_model_trained_on', 'Not trained'),
+                    'ltc_model_progress': model_status.get('ltc_model_progress', 0),
+                    'uni_model_ready': model_status.get('uni_model_ready', False),
+                    'uni_model_accuracy': model_status.get('uni_model_accuracy', 0),
+                    'uni_model_status': model_status.get('uni_model_status', 'not_started'),
+                    'uni_model_trained_on': model_status.get('uni_model_trained_on', 'Not trained'),
+                    'uni_model_progress': model_status.get('uni_model_progress', 0),
+                    'link_model_ready': model_status.get('link_model_ready', False),
+                    'link_model_accuracy': model_status.get('link_model_accuracy', 0),
+                    'link_model_status': model_status.get('link_model_status', 'not_started'),
+                    'link_model_trained_on': model_status.get('link_model_trained_on', 'Not trained'),
+                    'link_model_progress': model_status.get('link_model_progress', 0),
                     'alt_model_ready': model_status.get('alt_model_ready', False),
                     'alt_model_accuracy': model_status.get('alt_model_accuracy', 0),
                     'alt_model_status': model_status.get('alt_model_status', 'not_started'),
@@ -1131,6 +1217,97 @@ def run_unified_dashboard():
             return {"error": str(e)}
 
     # Update control endpoints to use unified bot
+    # Specific endpoints must come BEFORE catch-all route
+
+    @app.post("/api/control/switch_live")
+    async def switch_to_live():
+        """Switch to live trading mode - clears paper positions."""
+        try:
+            if not db_manager.get_paper_trading():
+                return {"status": "error", "message": "Already in live trading mode"}
+
+            open_positions = db_manager.get_all_open_positions_detailed()
+            position_count = len(open_positions)
+
+            db_manager.clear_all_open_positions()
+            trading_engine.active_positions = {}
+
+            db_manager.set_paper_trading(False)
+            trading_engine.paper_trading = False
+
+            unified_bot.broadcast_status({
+                "type": "status_update",
+                "paper_trading": False,
+                "message": f"Switched to live trading. Cleared {position_count} paper positions."
+            })
+
+            return {
+                "status": "success",
+                "message": f"Live trading enabled. {position_count} paper positions cleared.",
+                "positions_cleared": position_count
+            }
+        except Exception as e:
+            logger.error(f"Switch to live error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @app.post("/api/control/switch_paper")
+    async def switch_to_paper():
+        """Switch to paper trading mode."""
+        try:
+            if db_manager.get_paper_trading():
+                return {"status": "error", "message": "Already in paper trading mode"}
+
+            db_manager.set_paper_trading(True)
+            trading_engine.paper_trading = True
+
+            unified_bot.broadcast_status({
+                "type": "status_update",
+                "paper_trading": True,
+                "message": "Switched to paper trading"
+            })
+
+            return {"status": "success", "message": "Paper trading enabled"}
+        except Exception as e:
+            logger.error(f"Switch to paper error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @app.post("/api/position/{position_id}/close")
+    async def close_position(position_id: str):
+        """Close a specific open position."""
+        try:
+            if position_id not in trading_engine.active_positions:
+                return {"status": "error", "message": "Position not found"}
+
+            position = trading_engine.active_positions[position_id]
+            product_id = position.get('product_id', position_id)
+            side = position.get('side', 'buy')
+            size = position.get('size', 0)
+            entry_price = position.get('entry_price', 0)
+
+            from src.data_collector import data_collector
+            prices = data_collector.get_current_prices()
+            current_price = prices.get(product_id.replace('-GBP', '-USD').replace('-USD', '-GBP'), entry_price) or entry_price
+
+            pnl = (current_price - entry_price) * size if side == 'buy' else (entry_price - current_price) * size
+
+            trading_engine._close_position(position_id, float(pnl), "Manual close", float(current_price))
+
+            # Sync trading_engine.active_positions with database after closing
+            trading_engine.active_positions = db_manager.load_open_positions()
+
+            logger.info(f"Position closed manually: {position_id} ({product_id}, P&L: {pnl:.4f})")
+
+            return {
+                "status": "success",
+                "message": f"Position closed: {product_id}",
+                "position_id": position_id,
+                "exit_price": current_price,
+                "pnl": pnl
+            }
+        except Exception as e:
+            logger.error(f"Close position error: {e}")
+            return {"status": "error", "message": str(e)}
+
     @app.post("/api/control/{action}")
     async def control_bot(action: str):
         """Control bot operations."""
@@ -1142,7 +1319,7 @@ def run_unified_dashboard():
                         "status": "success", 
                         "message": "Trading engine started",
                         "trading_active": True,
-                        "paper_trading": trading_engine.paper_trading
+                        "paper_trading": db_manager.get_paper_trading()
                     }
                 else:
                     return {"status": "error", "message": "Trading already active"}
@@ -1154,13 +1331,13 @@ def run_unified_dashboard():
                         "status": "success", 
                         "message": "Trading engine stopped",
                         "trading_active": False,
-                        "paper_trading": trading_engine.paper_trading
+                        "paper_trading": db_manager.get_paper_trading()
                     }
                 else:
                     return {"status": "error", "message": "Trading not active"}
 
             elif action == "enable_live_trading":
-                if trading_engine.paper_trading:
+                if db_manager.get_paper_trading():
                     trading_engine.enable_live_trading()
                     unified_bot.broadcast_status({
                         "type": "status_update",
@@ -1172,11 +1349,8 @@ def run_unified_dashboard():
                     return {"status": "error", "message": "Live trading already enabled"}
 
             elif action == "switch_to_paper_trading":
-                if not trading_engine.paper_trading:
-                    trading_engine.paper_trading = True
-                    # Persist the trading mode change
-                    db_manager.save_user_setting('paper_trading', 'true')
-                    logger.info("Switched to paper trading mode")
+                if not db_manager.get_paper_trading():
+                    trading_engine.switch_to_paper_trading()
                     unified_bot.broadcast_status({
                         "type": "status_update",
                         "paper_trading": True,
@@ -1254,9 +1428,13 @@ def run_unified_dashboard():
                 return {"status": "error", "message": "Invalid currency. Must be USD or GBP"}
 
             # Use unified bot to set display currency
-            success = unified_bot.set_display_currency(currency)
+            success = await unified_bot.set_display_currency(currency)
             if success:
-                return {"status": "success", "message": f"Display currency set to {currency}"}
+                return {
+                    "status": "success", 
+                    "message": f"Display currency set to {currency}",
+                    "saved_currency": currency
+                }
             else:
                 return {"status": "error", "message": "Failed to save currency preference"}
 
@@ -1291,6 +1469,16 @@ def run_unified_dashboard():
             logger.error(f"Base currency error: {e}")
             return {"status": "error", "message": str(e)}
 
+    @app.get("/api/settings/display_currency")
+    async def get_display_currency():
+        """Get current display currency for verification."""
+        try:
+            currency = db_manager.get_user_setting('display_currency', 'USD')
+            return {"display_currency": currency}
+        except Exception as e:
+            logger.error(f"Get display currency error: {e}")
+            return {"display_currency": "USD", "error": str(e)}
+
     @app.get("/api/currency/info")
     async def get_currency_info():
         """Get current currency configuration and exchange rates."""
@@ -1309,23 +1497,206 @@ def run_unified_dashboard():
             # Get current currency configuration
             currency_info = unified_bot.get_currency_info()
             
-            # Get other settings
-            display_currency = unified_bot.display_currency
-            base_currency = unified_bot.base_currency
+            # Get other settings from database (not in-memory cache)
+            display_currency = db_manager.get_user_setting('display_currency', 'GBP')
+            if display_currency is None:
+                display_currency = 'GBP'
+            base_currency = db_manager.get_user_setting('base_currency', 'GBP')
+            if base_currency is None:
+                base_currency = 'GBP'
+            paper_trading = db_manager.get_paper_trading()
             
             context = {
                 "display_currency": display_currency,
                 "base_currency": base_currency,
                 "currency_info": currency_info,
-                "paper_trading": trading_engine.paper_trading,
+                "paper_trading": paper_trading,
                 "trading_active": unified_bot.trading_active,
-                "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "settings": settings,  # Add settings object for template access
             }
             
-            return templates.TemplateResponse("settings.html", {"request": {"type": "http"}, **context})
+            response = templates.TemplateResponse("settings.html", {"request": {"type": "http"}, **context})
+            
+            # Add aggressive cache-busting headers
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            return response
             
         except Exception as e:
             logger.error(f"Settings page error: {e}")
+            return HTMLResponse(content=f"<h1>Error: {str(e)}</h1>")
+
+    @app.get("/trades", response_class=HTMLResponse)
+    async def trades_page():
+        """Trades history page."""
+        try:
+            # Get trades from database
+            trades = db_manager.get_trades(limit=100)  # Get recent trades
+            has_trades = len(trades) > 0
+            
+            # Calculate statistics
+            total_trades = len(trades)
+            winning_trades = sum(1 for trade in trades if trade.get('pnl', 0) > 0)
+            win_rate = (winning_trades / total_trades * 100) if has_trades else 0.0
+            total_pnl = sum(trade.get('pnl', 0) for trade in trades)
+            
+            context = {
+                "trading_active": unified_bot.trading_active,
+                "paper_trading": db_manager.get_paper_trading(),
+                "display_currency": unified_bot.display_currency,
+                "base_currency": unified_bot.base_currency,
+                "trades": trades,
+                "has_trades": has_trades,
+                "total_trades": total_trades,
+                "winning_trades": winning_trades,
+                "win_rate": win_rate,
+                "total_pnl": total_pnl,
+            }
+            return templates.TemplateResponse("trades.html", {"request": {"type": "http"}, **context})
+        except Exception as e:
+            logger.error(f"Trades page error: {e}")
+            return HTMLResponse(content=f"<h1>Error: {str(e)}</h1>")
+
+    @app.get("/performance", response_class=HTMLResponse)
+    async def performance_page():
+        """Performance metrics page."""
+        try:
+            # Get trades from database for performance analysis
+            trades = db_manager.get_trades(limit=1000)  # Get more trades for analysis
+            has_trades = len(trades) > 0
+            
+            # Initialize performance data
+            performance_data = {}
+            product_stats = {}
+            
+            if has_trades:
+                # Calculate performance by time period
+                from datetime import timedelta
+                now = datetime.now()
+                periods = {
+                    "Today": timedelta(hours=24),
+                    "Week": timedelta(days=7),
+                    "Month": timedelta(days=30),
+                    "All Time": timedelta(days=365)
+                }
+                
+                for period_name, period_delta in periods.items():
+                    period_trades = []
+                    for trade in trades:
+                        try:
+                            # Handle timestamp parsing more carefully
+                            timestamp = trade['timestamp']
+                            if isinstance(timestamp, str):
+                                # Remove timezone info if present
+                                timestamp = timestamp.replace('Z', '+00:00')
+                                trade_time = datetime.fromisoformat(timestamp)
+                            elif isinstance(timestamp, datetime):
+                                trade_time = timestamp
+                            else:
+                                # Skip if timestamp format is unexpected
+                                continue
+                            
+                            if now - trade_time <= period_delta:
+                                period_trades.append(trade)
+                        except Exception as parse_error:
+                            # Skip trades with timestamp parsing issues
+                            logger.debug(f"Skipping trade with timestamp error: {parse_error}")
+                            continue
+                    
+                    wins = sum(1 for trade in period_trades if trade.get('pnl', 0) > 0)
+                    total_pnl = sum(trade.get('pnl', 0) for trade in period_trades)
+                    
+                    performance_data[period_name] = {
+                        "trades": len(period_trades),
+                        "wins": wins,
+                        "total_pnl": total_pnl,
+                        "win_rate": wins / len(period_trades) if period_trades else 0,
+                        "avg_pnl": total_pnl / len(period_trades) if period_trades else 0
+                    }
+                
+                # Calculate performance by product
+                products = {}
+                for trade in trades:
+                    product = trade.get('product_id', 'Unknown')
+                    if product not in products:
+                        products[product] = {"trades": [], "wins": 0, "total_pnl": 0}
+                    
+                    products[product]["trades"].append(trade)
+                    if trade.get('pnl', 0) > 0:
+                        products[product]["wins"] += 1
+                    products[product]["total_pnl"] += trade.get('pnl', 0)
+                
+                # Convert to stats format for template
+                for product, data in products.items():
+                    product_stats[product] = {
+                        "trades": len(data["trades"]),
+                        "wins": data["wins"],
+                        "total_pnl": data["total_pnl"],
+                        "win_rate": data["wins"] / len(data["trades"]),
+                        "avg_pnl": data["total_pnl"] / len(data["trades"])
+                    }
+            
+            context = {
+                "trading_active": unified_bot.trading_active,
+                "paper_trading": db_manager.get_paper_trading(),
+                "display_currency": unified_bot.display_currency,
+                "base_currency": unified_bot.base_currency,
+                "has_trades": has_trades,
+                "performance_data": performance_data,
+                "product_stats": product_stats,
+            }
+            return templates.TemplateResponse("performance.html", {"request": {"type": "http"}, **context})
+        except Exception as e:
+            logger.error(f"Performance page error: {e}")
+            return HTMLResponse(content=f"<h1>Error: {str(e)}</h1>")
+
+    @app.get("/models", response_class=HTMLResponse)
+    async def models_page():
+        """AI Models status page."""
+        try:
+            # Get model status from AI model
+            model_status = ai_model.get_model_status()
+            
+            # Prepare models info for template
+            models_info = []
+            for product_id in settings.PRODUCT_IDS:
+                # Map to USD pair for model status
+                usd_pair = settings.TRAINING_PAIRS[settings.PRODUCT_IDS.index(product_id)] if product_id in settings.PRODUCT_IDS else product_id
+                
+                # Get current signal for this product
+                try:
+                    signal_data = ai_model.get_signal(product_id)
+                    signal = signal_data.get('action', 'N/A')
+                    confidence = signal_data.get('confidence', 0.0)
+                except:
+                    signal = 'N/A'
+                    confidence = 0.0
+                
+                models_info.append({
+                    'product_id': product_id,
+                    'trained': usd_pair in model_status.get('models_trained', []),
+                    'signal': signal,
+                    'confidence': confidence
+                })
+            
+            # Get features count (from AI model if available)
+            features_count = 16  # Default based on known features
+            
+            context = {
+                "trading_active": unified_bot.trading_active,
+                "paper_trading": db_manager.get_paper_trading(),
+                "display_currency": unified_bot.display_currency,
+                "base_currency": unified_bot.base_currency,
+                "models_trained": model_status.get('models_trained_count', 0),
+                "models_info": models_info,
+                "features_count": features_count,
+            }
+            return templates.TemplateResponse("models.html", {"request": {"type": "http"}, **context})
+        except Exception as e:
+            logger.error(f"Models page error: {e}")
             return HTMLResponse(content=f"<h1>Error: {str(e)}</h1>")
 
     @app.post("/api/trades/clear")
@@ -1350,7 +1721,7 @@ def run_unified_dashboard():
         """Place a very small test trade to verify API keys work."""
         try:
             # Only allow in paper trading mode for safety
-            if not trading_engine.paper_trading:
+            if not db_manager.get_paper_trading():
                 return {
                     "success": False,
                     "error": "Test trades only allowed in paper trading mode"
@@ -1425,6 +1796,21 @@ def run_unified_dashboard():
             return status
         except Exception as e:
             logger.error(f"Status API error: {e}")
+            return {"error": str(e)}
+
+    @app.get("/api/portfolio/open_positions")
+    async def get_open_positions():
+        """Get all currently open positions with P&L."""
+        try:
+            positions = db_manager.get_all_open_positions_detailed()
+            total_pnl = sum(p.get('pnl', 0) for p in positions)
+            return {
+                "positions": positions,
+                "count": len(positions),
+                "total_pnl": total_pnl
+            }
+        except Exception as e:
+            logger.error(f"Open positions API error: {e}")
             return {"error": str(e)}
 
     @app.get("/api/models/status")
@@ -1534,25 +1920,42 @@ def run_unified_dashboard():
     async def get_portfolio():
         """Get portfolio composition with currency conversion."""
         try:
-            # Get user's preferred display currency
             display_currency = db_manager.get_user_setting('display_currency', 'USD') or 'USD'
+            base_currency = db_manager.get_user_setting('base_currency', settings.BASE_CURRENCY) or settings.BASE_CURRENCY
             
             accounts = coinbase_api.get_accounts()
             current_prices = data_collector.get_current_prices()
 
+            from src.currency_utils import currency_converter
+            exchange_rate = currency_converter.get_exchange_rate('GBP', 'USD') or 1.30
+
+            trading_currencies = ['BTC', 'ETH', 'SOL', 'LTC', 'DOT', 'ADA', 'LINK', 'UNI']
+            stablecoins = ['USD', 'USDC', 'USDT']
+            
             portfolio = []
             total_value_usd = 0.0
 
             for account in accounts:
                 currency = account['currency']
-                balance = account['available']
+                balance = float(account.get('available', 0))
+                if balance <= 0:
+                    continue
 
-                if currency == 'USD':
+                if currency in stablecoins:
                     value_usd = balance
                     price = 1.0
-                elif currency in ['BTC', 'ETH'] and f"{currency}-USD" in current_prices:
-                    price = current_prices[f"{currency}-USD"]
-                    value_usd = balance * price
+                elif currency in trading_currencies:
+                    price_pair = f"{currency}-USD" if f"{currency}-USD" in current_prices else None
+                    if price_pair and price_pair in current_prices:
+                        price = current_prices[price_pair]
+                        value_usd = balance * price
+                    else:
+                        gbp_pair = f"{currency}-GBP"
+                        if gbp_pair in current_prices:
+                            price = current_prices[gbp_pair]
+                            value_usd = balance * price * exchange_rate
+                        else:
+                            continue
                 else:
                     continue
 
@@ -1563,23 +1966,22 @@ def run_unified_dashboard():
                     "balance": balance,
                     "price": price,
                     "value_usd": value_usd,
-                    "percentage": 0.0  # Will be calculated after total
+                    "percentage": 0.0
                 })
 
-            # Calculate percentages
             for item in portfolio:
                 item["percentage"] = (item["value_usd"] / total_value_usd * 100) if total_value_usd > 0 else 0
 
-            # Convert to display currency
-            from src.currency_utils import currency_converter
             total_value = currency_converter.convert_amount(total_value_usd, 'USD', display_currency)
             
-            # Convert portfolio items to display currency
             converted_portfolio = []
             for item in portfolio:
                 converted_item = item.copy()
                 converted_item['value'] = currency_converter.convert_amount(
                     item['value_usd'], 'USD', display_currency
+                )
+                converted_item['gbp_value'] = currency_converter.convert_amount(
+                    item['value_usd'], 'USD', 'GBP'
                 )
                 converted_item['formatted_value'] = currency_converter.format_currency(
                     converted_item['value'], display_currency

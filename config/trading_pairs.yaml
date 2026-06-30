@@ -1,0 +1,110 @@
+# Trading Pairs Configuration
+# 
+# v1.3.1 - Added back SOL, LTC, ADA, LINK pairs
+# 
+# To add new pairs: Add entry to trading_pairs below.
+# No code changes required - position sizing auto-adjusts.
+
+trading_pairs:
+  BTC-GBP:
+    name: "Bitcoin"
+    base_currency: "BTC"
+    binance_symbol: "BTCGBP"
+    kraken_symbol: "XXBTZGBP"
+    coinbase_id: "BTC-GBP"
+    coingecko_id: "bitcoin"
+    price_priority:
+      - coinbase
+      - binance
+      - kraken
+      - coingecko
+
+  ETH-GBP:
+    name: "Ethereum"
+    base_currency: "ETH"
+    binance_symbol: "ETHGBP"
+    kraken_symbol: "XETHZGBP"
+    coinbase_id: "ETH-GBP"
+    coingecko_id: "ethereum"
+    price_priority:
+      - coinbase
+      - binance
+      - kraken
+      - coingecko
+
+  SOL-GBP:
+    name: "Solana"
+    base_currency: "SOL"
+    binance_symbol: "SOLGBP"
+    kraken_symbol: "SOLGBP"
+    coinbase_id: "SOL-GBP"
+    coingecko_id: "solana"
+    price_priority:
+      - coinbase
+      - binance
+      - kraken
+      - coingecko
+
+  LTC-GBP:
+    name: "Litecoin"
+    base_currency: "LTC"
+    binance_symbol: "LTCGBP"
+    kraken_symbol: "LTCGBP"
+    coinbase_id: "LTC-GBP"
+    coingecko_id: "litecoin"
+    price_priority:
+      - coinbase
+      - binance
+      - kraken
+      - coingecko
+
+  ADA-GBP:
+    name: "Cardano"
+    base_currency: "ADA"
+    binance_symbol: "ADAGBP"
+    kraken_symbol: "ADAGBP"
+    coinbase_id: "ADA-GBP"
+    coingecko_id: "cardano"
+    price_priority:
+      - coinbase
+      - binance
+      - kraken
+      - coingecko
+
+  LINK-GBP:
+    name: "Chainlink"
+    base_currency: "LINK"
+    binance_symbol: "LINKGBP"
+    kraken_symbol: "LINKGBP"
+    coinbase_id: "LINK-GBP"
+    coingecko_id: "chainlink"
+    price_priority:
+      - coinbase
+      - binance
+      - kraken
+      - coingecko
+
+# Position Sizing Configuration
+# 6 pairs × 13% = 78% max deployed, 22% cash reserve
+position_sizing:
+  max_per_pair_percent: 0.13
+  max_total_deployed: 0.78
+  min_cash_reserve: 0.22
+
+# Data Source Configuration
+data_sources:
+  coinbase:
+    enabled: true
+    weight: 0.40
+  binance:
+    enabled: true
+    weight: 0.30
+  kraken:
+    enabled: true
+    weight: 0.20
+  coingecko:
+    enabled: true
+    weight: 0.10
+  
+  min_sources: 2
+  max_deviation_percent: 3.0

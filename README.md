@@ -1,6 +1,8 @@
 # Crypto Trading Bot
 
-A sophisticated automated cryptocurrency trading bot built with Python, FastAPI, and machine learning capabilities. Features real-time market analysis, risk management, and web-based monitoring with multi-currency support.
+A sophisticated automated cryptocurrency trading bot built with Python, FastAPI, and machine learning capabilities. Features real-time market analysis, risk management, and web-based monitoring with multi-currency support (USD/GBP).
+
+**Current Version**: v1.0.6 (January 27, 2026)
 
 ## 🤖 Development Credits
 
@@ -72,6 +74,16 @@ python main.py
 ```
 
 ## ⚙️ Configuration
+
+### Current Configuration (v1.0.6)
+
+- **Base Currency**: GBP (portfolio valuation and trading pairs)
+- **Trading Pairs**: 8 GBP pairs (BTC-GBP, ETH-GBP, SOL-GBP, LTC-GBP, DOT-GBP, ADA-GBP, LINK-GBP, UNI-GBP)
+- **Market Data**: High-liquidity USD markets with real-time GBP conversion
+- **Display Currency**: Toggle between USD and GBP (user preference, persistent)
+- **Risk Management**: Conservative 1-2% per trade with day trading parameters
+- **AI Models**: 8 Random Forest models (65%+ accuracy)
+- **Deployment**: Docker containerized on Raspberry Pi 5
 
 ### API Credentials
 
@@ -314,6 +326,41 @@ LOG_BACKUP_COUNT = 5         # Keep 5 backup files
 - **Diversification**: Multi-asset portfolio management (BTC, ETH)
 - **Drawdown Protection**: Multiple safety layers against losses
 - **Sandbox Testing**: Risk-free strategy testing
+
+## 📅 Recent Updates (v1.0.6)
+
+### January 27, 2026 - Critical Bug Fixes
+
+**1. Currency Switcher Fixed**
+- ✅ Fixed currency switcher persisting issue by adding `await` to async function calls
+- ✅ Currency preferences now save correctly to database
+- ✅ Display currency switching (USD ↔ GBP) works as expected
+
+**2. Market Conditions Data Fixed**
+- ✅ Removed invalid API call to non-existent `GBP-USD` trading pair
+- ✅ Added validation to skip invalid pairs in coinbase_api.py
+- ✅ Market conditions now display prices and AI signals correctly
+- ✅ No more 404 errors in logs
+
+**3. API Route Ordering Fixed**
+- ✅ Moved specific currency endpoints before catch-all route
+- ✅ Fixed "Method Not Allowed" errors on currency endpoints
+- ✅ All API endpoints now accessible with proper routing
+
+**4. UI Layout Improved**
+- ✅ Moved crypto balance display to appear directly under crypto price
+- ✅ Better UX with holdings immediately visible
+- ✅ Improved information hierarchy
+
+### Previous Versions
+
+**v1.0.5** (January 25, 2026): GBP trading system complete with 8 trading pairs and AI model coverage
+
+**v1.0.2** (January 23, 2026): Portfolio valuation fixes and API diagnostics
+
+**v1.0.1** (January 23, 2026): USDC valuation bug fixes, currency switching, test trade endpoint
+
+---
 
 ## 🐛 Troubleshooting
 

@@ -262,22 +262,48 @@ from src.ai_model import ai_model
 
 #### **Model Training Issues:**
 - **Cause**: Trying to train on GBP pairs with no data
-- **Fix**: Use USD pairs for training, convert for display
-
-#### **Template Variable Errors:**
-- **Cause**: Mismatch between context keys and template references
-- **Fix**: Ensure `models_info`, `product_ids`, `gbp_balance_status` in context
+- **Fix**: Use GBP pairs for direct training (350 candles available for all pairs)
 
 ### **Development Checklist:**
-- [ ] Use USD pairs for AI model training and signals
-- [ ] Convert USD prices to GBP for dashboard display
-- [ ] Include `product_ids` and `models_info` in context
-- [ ] Explain USD data source in UI
-- [ ] Test conversion accuracy with real rates
-- [ ] Verify all 8 GBP pairs display correctly
+- [x] Use GBP pairs for AI model training and signals (v1.6.0)
+- [x] Remove USD→GBP conversion for model training
+- [x] Include `product_ids` and `models_info` in context
+- [x] Train on same pairs we trade (direct market dynamics)
 
 ---
 
-**Last Updated**: 2026-01-27
-**Architecture Status**: ✅ Unified Dashboard + USD→GBP Conversion
+## 🗄️ Signal Caching Architecture (v1.2.1)
+
+### **Simplified Caching (March 2026)**
+
+Removed file-based cache sharing between processes. Each process manages its own independent signal cache:
+
+| Process | Cache Location | Cache TTL |
+|---------|---------------|-----------|
+| Trading Process | In-memory `_signal_cache` | 5 minutes |
+| API Workers | In-memory `_signal_cache` | 5 minutes |
+| Dashboard | Reads directly from SQLite DB | N/A |
+
+### **Why Simplified?**
+
+1. **No race conditions**: No competing threads writing to shared file
+2. **Faster startup**: No background pre-warming needed
+3. **Simpler code**: trading_loop.py reduced from ~200 to ~130 lines
+4. **Reliable execution**: Cycle timeout increased to 1200s
+
+### **Key Configuration**
+
+```python
+# ai_model.py
+_signal_cache_ttl = 300  # 5 minutes
+
+# trading_engine.py
+cycle_timeout = 1200  # 20 minutes
+use_cache = True  # Use cached signals for speed
+```
+
+---
+
+**Last Updated**: 2026-03-21
+**Architecture Status**: ✅ Unified Dashboard + Simplified Caching
 **Data Source**: High-liquidity USD markets with GBP display conversion

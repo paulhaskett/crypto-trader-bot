@@ -65,11 +65,13 @@ class CoinbaseAPI:
         # Initialize official SDK client if available
         if SDK_AVAILABLE:
             try:
+                # Set a 60-second timeout for all SDK requests to prevent hanging
                 self.sdk_client = RESTClient(
                     api_key=self.advanced_api_key,
-                    api_secret=self.advanced_api_secret  # Use api_secret parameter
+                    api_secret=self.advanced_api_secret,
+                    timeout=60  # 60 second timeout for all requests
                 )
-                logger.info("Coinbase Advanced SDK client initialized successfully")
+                logger.info("Coinbase Advanced SDK client initialized successfully with 60s timeout")
                 logger.info(f"API Key: {self.advanced_api_key[:50]}...")
             except Exception as e:
                 logger.error(f"Failed to initialize SDK client: {e}")
@@ -92,7 +94,8 @@ class CoinbaseAPI:
         
         # Rate limiting
         self._last_request_time = 0
-        self._rate_limit_delay = 0.1  # 100ms between requests
+        self._rate_limit_delay = 1.0  # 1 second between authenticated requests (orders, accounts)
+        self._market_data_delay = 0.1  # 100ms between public market data requests (prices)
         
         # Proxy configuration
         self.use_proxy = settings.USE_PROXY
@@ -113,7 +116,7 @@ class CoinbaseAPI:
             logger.info("Coinbase API client initialized successfully")
     
     def _make_request(self, method: str, endpoint: str, data: dict = None, auth: bool = True) -> Optional[dict]:
-        """Make a request to the Coinbase API.
+        """Make a request to the Coinbase API with retry logic.
 
         Args:
             method: HTTP method
@@ -121,108 +124,132 @@ class CoinbaseAPI:
             data: Request data for POST/PUT
             auth: Whether to include authentication headers (default: True)
         """
-        # Rate limiting
-        current_time = time.time()
-        time_since_last = current_time - self._last_request_time
-        if time_since_last < self._rate_limit_delay:
-            time.sleep(self._rate_limit_delay - time_since_last)
+        max_retries = 3
+        base_delay = 1.0  # Start with 1 second delay
 
-        try:
-            # Choose base URL based on endpoint type
-            if endpoint.startswith('products/'):
-                # Market data endpoints use Exchange API (public)
-                url = f"{self.market_data_url}/{endpoint}"
-                use_auth = False
-            else:
-                # Account/portfolio endpoints use v2 API (authenticated)
-                url = f"{self.base_url}/{endpoint}"
-                use_auth = auth
-                # Debug logging
-                logger.debug(f"Endpoint: '{endpoint}', Base URL: '{self.base_url}', Final URL: '{url}'")
-                logger.debug(f"Using authenticated endpoint: {url}")
-
-            headers = {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-
-            # Add authentication using official Coinbase CDP API for all endpoints
-            if use_auth:
-                # Prioritize advanced API keys for trading endpoints
-                if endpoint.startswith('brokerage/'):
-                    current_key = self.advanced_api_key or self.api_key
-                    current_secret = self.advanced_api_secret or self.api_secret
+        for attempt in range(max_retries):
+            try:
+                # Rate limiting - use faster delay for market data (products/*)
+                current_time = time.time()
+                time_since_last = current_time - self._last_request_time
+                
+                # Use faster rate limit for public market data endpoints
+                if endpoint.startswith('products/'):
+                    rate_delay = self._market_data_delay
                 else:
-                    current_key = self.api_key
-                    current_secret = self.api_secret
+                    rate_delay = self._rate_limit_delay
+                    
+                if time_since_last < rate_delay:
+                    time.sleep(rate_delay - time_since_last)
 
-                if current_key and current_secret:
-                    # Use JWT authentication for Advanced Trade API endpoints
-                    if ECDSA_AVAILABLE and ('BEGIN EC PRIVATE KEY' in current_secret or 'BEGIN PRIVATE KEY' in current_secret):
-                        jwt_token = self._create_jwt_token(method, endpoint, api_key=current_key, api_secret=current_secret)
-                        headers.update({
-                            'Authorization': f'Bearer {jwt_token}',
-                            'Content-Type': 'application/json'
-                        })
+                # Choose base URL based on endpoint type
+                if endpoint.startswith('products/'):
+                    url = f"{self.market_data_url}/{endpoint}"
+                    use_auth = False
+                else:
+                    url = f"{self.base_url}/{endpoint}"
+                    use_auth = auth
+
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+
+                # Add authentication using official Coinbase CDP API for all endpoints
+                if use_auth:
+                    if endpoint.startswith('brokerage/'):
+                        current_key = self.advanced_api_key or self.api_key
+                        current_secret = self.advanced_api_secret or self.api_secret
                     else:
-                        # Fallback to legacy HMAC authentication
-                        timestamp = str(int(time.time()))
-                        message_body = json.dumps(data) if data else ''
-                        message = timestamp + method.upper() + endpoint + message_body
-                        signature = hmac.new(
-                            current_secret.encode('utf-8'),
-                            message.encode('utf-8'),
-                            hashlib.sha256
-                        ).hexdigest()
+                        current_key = self.api_key
+                        current_secret = self.api_secret
 
-                        headers.update({
-                            'CB-ACCESS-KEY': current_key,
-                            'CB-ACCESS-SIGN': signature,
-                            'CB-ACCESS-TIMESTAMP': timestamp
-                        })
+                    if current_key and current_secret:
+                        if ECDSA_AVAILABLE and ('BEGIN EC PRIVATE KEY' in current_secret or 'BEGIN PRIVATE KEY' in current_secret):
+                            jwt_token = self._create_jwt_token(method, endpoint, api_key=current_key, api_secret=current_secret)
+                            headers.update({
+                                'Authorization': f'Bearer {jwt_token}',
+                                'Content-Type': 'application/json'
+                            })
+                        else:
+                            timestamp = str(int(time.time()))
+                            message = timestamp + method + endpoint + (json.dumps(data) if data else '')
+                            signature = hmac.new(current_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+                            headers.update({
+                                'CB-ACCESS-KEY': current_key,
+                                'CB-ACCESS-SIGN': signature,
+                                'CB-ACCESS-TIMESTAMP': timestamp
+                            })
+                    else:
+                        logger.warning("No API credentials available for authenticated request")
+                        return None
+
+                self._last_request_time = time.time()
+
+                # Make request
+                response = requests.request(method, url, headers=headers, json=data, 
+                                       proxies=self.proxy_config if self.use_proxy else None, 
+                                       timeout=settings.PROXY_TIMEOUT if self.use_proxy else 30)
+
+                # Check for rate limiting (429)
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', base_delay * (2 ** attempt)))
+                    logger.warning(f"Rate limited by Coinbase (429). Retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_after)
+                    continue
+
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.Timeout as e:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Request timeout (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s")
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
                 else:
-                    logger.warning("No API credentials available for authenticated request")
+                    logger.error(f"Request timed out after {max_retries} attempts")
                     return None
 
-            self._last_request_time = time.time()
+            except requests.exceptions.RequestException as e:
+                delay = base_delay * (2 ** attempt)
+                # 400 errors on order lookups are expected - log as DEBUG to reduce noise
+                if hasattr(e, 'response') and e.response and e.response.status_code == 400:
+                    logger.debug(f"API request returned 400 (attempt {attempt + 1}/{max_retries}): {e}")
+                else:
+                    logger.warning(f"API request failed (attempt {attempt + 1}/{max_retries}): {e}")
 
-            # Make request
-            response = requests.request(method, url, headers=headers, json=data, 
-                                   proxies=self.proxy_config if self.use_proxy else None, 
-                                   timeout=settings.PROXY_TIMEOUT if self.use_proxy else 30)
-            response.raise_for_status()
+                # Check for rate limiting in error response
+                if hasattr(e, 'response') and e.response and e.response.status_code == 429:
+                    logger.warning(f"Rate limited by Coinbase. Retrying in {delay}s")
+                    if attempt < max_retries - 1:
+                        time.sleep(delay)
+                        continue
 
-            return response.json()
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                else:
+                    # Try to get error details
+                    if hasattr(e, 'response') and e.response:
+                        try:
+                            error_data = e.response.json()
+                            # Only log as error for non-400 errors
+                            if e.response.status_code != 400:
+                                logger.error(f"API error details: {error_data}")
+                            else:
+                                logger.debug(f"API error details: {error_data}")
+                        except:
+                            if e.response.status_code != 400:
+                                logger.error(f"API error status: {e.response.status_code}")
+                            else:
+                                logger.debug(f"API error status: {e.response.status_code}")
+                    logger.error(f"API request failed after {max_retries} attempts")
+                    return None
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error in API request: {e}")
+                return None
 
-            # Try to get error details
-            if hasattr(e, 'response') and e.response:
-                try:
-                    error_data = e.response.json()
-                    logger.error(f"API error details: {error_data}")
-                except:
-                    logger.error(f"API error status: {e.response.status_code}")
-
-            return None
-            
-            self._last_request_time = time.time()
-            
-            # Make request
-            response = requests.request(method, url, headers=headers, json=data,
-                                   proxies=self.proxy_config if self.use_proxy else None,
-                                   timeout=settings.PROXY_TIMEOUT if self.use_proxy else 30)
-            response.raise_for_status()
-            
-            return response.json()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error in API request: {e}")
-            return None
+        return None
     
     def is_sandbox_mode(self) -> bool:
         """Check if running in sandbox mode."""
@@ -381,6 +408,11 @@ class CoinbaseAPI:
         Returns:
             Dictionary with price, volume, and other market data
         """
+        # Skip invalid trading pairs that don't exist on Coinbase
+        if product_id in ['GBP-USD', 'USDC-USD']:
+            logger.debug(f"Skipping invalid pair {product_id}, using fallback data")
+            return self._get_fallback_ticker(product_id)
+
         try:
             # Use public Exchange API for market data (no authentication required)
             response = self._make_request('GET', f'products/{product_id}/ticker')
@@ -402,6 +434,76 @@ class CoinbaseAPI:
             logger.error(f"Failed to get ticker for {product_id}: {e}")
             return self._get_fallback_ticker(product_id)
     
+    def get_product_info(self, product_id: str) -> Dict[str, Any]:
+        """
+        Get product details including base_increment for order precision.
+
+        Args:
+            product_id: Trading pair (e.g., 'UNI-GBP')
+
+        Returns:
+            Dictionary with product details including base_increment
+        """
+        # Check cache first
+        if hasattr(self, '_product_info_cache') and product_id in self._product_info_cache:
+            return self._product_info_cache[product_id]
+
+        try:
+            # Use public Exchange API
+            response = self._make_request('GET', f'products/{product_id}', auth=False)
+            if response:
+                result = {
+                    'product_id': product_id,
+                    'base_increment': response.get('base_increment', '0.00000001'),
+                    'quote_increment': response.get('quote_increment', '0.01'),
+                    'base_min_size': response.get('base_min_size', '0.00000001'),
+                    'base_max_size': response.get('base_max_size', '1000000000')
+                }
+                # Initialize cache if needed
+                if not hasattr(self, '_product_info_cache'):
+                    self._product_info_cache = {}
+                self._product_info_cache[product_id] = result
+                logger.debug(f"Got product info for {product_id}: base_increment={result['base_increment']}")
+                return result
+        except Exception as e:
+            logger.warning(f"Failed to get product info for {product_id}: {e}")
+        
+        # Return default if API fails
+        return {'product_id': product_id, 'base_increment': '0.00000001'}
+
+    def _format_size_for_order(self, size: float, product_id: str) -> str:
+        """
+        Format order size to match product's base_increment precision.
+
+        Args:
+            size: Order size in base currency
+            product_id: Trading pair (e.g., 'UNI-GBP')
+
+        Returns:
+            Properly formatted size string
+        """
+        product_info = self.get_product_info(product_id)
+        base_increment = product_info.get('base_increment', '0.00000001')
+        
+        try:
+            # Parse the base_increment to determine decimal places
+            increment_float = float(base_increment)
+            # Count decimal places in the increment
+            base_increment_str = base_increment
+            if '.' in base_increment_str:
+                decimal_places = len(base_increment_str.split('.')[1].rstrip('0'))
+            else:
+                decimal_places = 0
+            
+            # Round the size to the appropriate precision
+            formatted_size = f"{size:.{decimal_places}f}"
+            logger.debug(f"Formatted size {size} to {formatted_size} using {decimal_places} decimal places (base_increment: {base_increment})")
+            return formatted_size
+        except (ValueError, AttributeError) as e:
+            # Fallback to 8 decimal places
+            logger.warning(f"Failed to parse base_increment {base_increment}: {e}, using default 8 decimals")
+            return f"{size:.8f}"
+    
     def _get_fallback_ticker(self, product_id: str) -> Dict[str, Any]:
         """
         Fallback ticker data when API fails.
@@ -412,17 +514,22 @@ class CoinbaseAPI:
         Returns:
             Dictionary with fallback ticker data
         """
-        # Fallback prices (current market levels as of 2026)
+        # Fallback prices (STALE - only used when API fails completely)
+        # WARNING: These are outdated and should NOT be used for trading decisions
         fallback_prices = {
             'BTC-USD': 92000.0,
             'ETH-USD': 3100.0,
             'SOL-USD': 130.0,
             'LTC-USD': 70.0,
             'XRP-USD': 2.00,
-            'GBP-USD': 1.30
+            'GBP-USD': 1.26,  # Current exchange rate
+            'USDC-USD': 1.0   # Stablecoin pegged to USD
         }
         
         price = fallback_prices.get(product_id, 100.0)
+        
+        # Log warning when using fallback (should not happen in normal operation)
+        logger.debug(f"Using fallback for {product_id} - pair does not exist on Coinbase")
         
         return {
             'product_id': product_id,
@@ -430,7 +537,8 @@ class CoinbaseAPI:
             'volume_24h': 1000000.0,
             'low_24h': price * 0.95,
             'high_24h': price * 1.05,
-            'price_percent_chg_24h': 0.0
+            'price_percent_chg_24h': 0.0,
+            'is_fallback': True  # Flag to indicate this is fallback data
         }
     
     def get_candles(self, product_id: str, start: datetime = None,
@@ -624,13 +732,15 @@ class CoinbaseAPI:
         # Try Advanced Trade API first
         try:
             logger.info(f"Attempting order via Advanced Trade API: {side.upper()} {size} {product_id}")
+            # Format size using product-specific precision
+            formatted_size = self._format_size_for_order(size, product_id)
             order_data = {
                 'client_order_id': f"bot_{int(time.time())}",
                 'product_id': product_id,
                 'side': side.upper(),  # API requires uppercase: BUY/SELL
                 'order_configuration': {
                     'market_market_ioc': {
-                        'base_size': str(size)
+                        'base_size': formatted_size
                     }
                 }
             }
@@ -703,6 +813,94 @@ class CoinbaseAPI:
         except Exception as e:
             logger.error(f"Failed to get order {order_id}: {e}")
             return None
+
+    def get_transaction_summary(self) -> Optional[Dict[str, Any]]:
+        """
+        Get transaction fee summary including user's fee tier rates.
+        
+        Returns:
+            Dictionary with maker_fee_rate, taker_fee_rate, total_fees, total_volume
+            or None if failed
+        """
+        logger.info("Fetching transaction summary from Coinbase...")
+        
+        # Try using SDK first
+        if self.sdk_client:
+            try:
+                response = self.sdk_client.get_transaction_summary(product_type="SPOT")
+                
+                # Parse the response - SDK returns GetTransactionSummaryResponse object
+                # Access fee_tier as an attribute, not a dict key
+                if hasattr(response, 'fee_tier'):
+                    fee_tier = response.fee_tier
+                    # fee_tier is a dict-like object, access by key
+                    return {
+                        'maker_fee_rate': float(fee_tier.get('maker_fee_rate', 0)),
+                        'taker_fee_rate': float(fee_tier.get('taker_fee_rate', 0)),
+                        'total_fees': float(response.total_fees) if hasattr(response, 'total_fees') else 0,
+                        'total_volume': float(response.total_volume) if hasattr(response, 'total_volume') else 0,
+                        'pricing_tier': fee_tier.get('pricing_tier', 'Unknown')
+                    }
+            except Exception as e:
+                logger.warning(f"SDK get_transaction_summary failed: {e}")
+        
+        # Fallback: try direct API call
+        try:
+            response = self._make_request('GET', 'brokerage/transaction_summary?product_type=SPOT')
+            if response and 'fee_tier' in response:
+                fee_tier = response.get('fee_tier', {})
+                return {
+                    'maker_fee_rate': float(fee_tier.get('maker_fee_rate', 0)),
+                    'taker_fee_rate': float(fee_tier.get('taker_fee_rate', 0)),
+                    'total_fees': float(response.get('total_fees', 0)),
+                    'total_volume': float(response.get('total_volume', 0)),
+                    'pricing_tier': fee_tier.get('pricing_tier', 'Unknown')
+                }
+        except Exception as e:
+            logger.warning(f"Direct API call to transaction_summary failed: {e}")
+        
+        logger.warning("Could not fetch transaction summary, will use fallback fees")
+        return None
+    
+    def get_fees(self) -> Dict[str, Any]:
+        """
+        Get user's current fee rates with fallback to defaults.
+        
+        Returns:
+            Dictionary with maker_fee and taker_fee
+        """
+        # Try to get from database first (cached)
+        from src.database import db_manager
+        cached_fees = db_manager.get_fee_rates()
+        
+        if cached_fees:
+            return cached_fees
+        
+        # Fetch fresh from Coinbase
+        summary = self.get_transaction_summary()
+        
+        if summary:
+            fees = {
+                'maker_fee': summary['maker_fee_rate'],
+                'taker_fee': summary['taker_fee_rate'],
+                'pricing_tier': summary.get('pricing_tier', 'Unknown'),
+                'is_fallback': False
+            }
+            # Save to database
+            db_manager.save_fee_rates(
+                maker_fee=fees['maker_fee'],
+                taker_fee=fees['taker_fee']
+            )
+            return fees
+        
+        # Return fallback fees
+        from config.settings import settings
+        return {
+            'maker_fee': settings.DEFAULT_MAKER_FEE,
+            'taker_fee': settings.DEFAULT_TAKER_FEE,
+            'pricing_tier': 'Fallback (default)',
+            'is_fallback': True
+        }
 
     def convert_usdc_to_usd(self, usdc_amount: float) -> Optional[Dict[str, Any]]:
         """
@@ -826,79 +1024,164 @@ class CoinbaseAPI:
 
         # Try Advanced Trade API with official SDK first
         if self.sdk_client:
-            try:
-                logger.info(f"[DEBUG] Placing order via Coinbase SDK...")
-                client_order_id = f"bot_{int(time.time())}"
-                logger.info(f"[DEBUG] Client Order ID: {client_order_id}")
+            max_retries = 3
+            base_delay = 1.0
 
-                # Use official SDK methods
-                if side.lower() == 'buy':
-                    logger.info(f"[DEBUG] Using SDK market_order_buy...")
-                    # Format size as decimal string for SDK compatibility
-                    formatted_size = f"{size:.6f}"
-                    order = self.sdk_client.market_order_buy(
-                        client_order_id=client_order_id,
-                        product_id=product_id,
-                        base_size=formatted_size
-                    )
-                else:  # sell
-                    logger.info(f"[DEBUG] Using SDK market_order_sell...")
-                    # Format size as decimal string for SDK compatibility
-                    formatted_size = f"{size:.6f}"
-                    order = self.sdk_client.market_order_sell(
-                        client_order_id=client_order_id,
-                        product_id=product_id,
-                        base_size=formatted_size
-                    )
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"[DEBUG] Placing order via Coinbase SDK (attempt {attempt + 1}/{max_retries})...")
+                    client_order_id = f"bot_{int(time.time())}_{attempt}"
+                    logger.info(f"[DEBUG] Client Order ID: {client_order_id}")
 
-                logger.info(f"[DEBUG] SDK order response type: {type(order)}")
-                logger.info(f"[DEBUG] SDK order response attributes: {dir(order)}")
-                
-                # Extract order details from SDK response
-                if hasattr(order, 'success') and order.success:
-                    order_id = getattr(order, 'order_id', f"sdk_order_{int(time.time())}")
-                    sdk_result = {
-                        'success': True,
-                        'order_id': order_id,
-                        'size': size,
-                        'price': 0.0,  # Market orders don't have predetermined price
-                        'mode': 'live_sdk',
-                        'response_time': round(time.time() - order_start_time, 2)
-                    }
-                    logger.info(f"[DEBUG] SDK order SUCCESS: {sdk_result}")
-                    return sdk_result
-                else:
-                    error_msg = getattr(order, 'message', 'Unknown error')
-                    error_details = getattr(order, 'error_details', 'No details')
-                    logger.error(f"[DEBUG] SDK order FAILED: {error_msg}")
-                    logger.error(f"[DEBUG] SDK error details: {error_details}")
+                    # Use official SDK methods
+                    if side.lower() == 'buy':
+                        logger.info(f"[DEBUG] Using SDK market_order_buy...")
+                        # Format size using product-specific precision
+                        formatted_size = self._format_size_for_order(size, product_id)
+                        logger.info(f"[DEBUG] Formatted size (buy): {formatted_size}")
+                        order = self.sdk_client.market_order_buy(
+                            client_order_id=client_order_id,
+                            product_id=product_id,
+                            base_size=formatted_size
+                        )
+                    else:  # sell
+                        logger.info(f"[DEBUG] Using SDK market_order_sell...")
+                        # Format size using product-specific precision
+                        formatted_size = self._format_size_for_order(size, product_id)
+                        logger.info(f"[DEBUG] Formatted size (sell): {formatted_size}")
+                        order = self.sdk_client.market_order_sell(
+                            client_order_id=client_order_id,
+                            product_id=product_id,
+                            base_size=formatted_size
+                        )
+
+                    logger.info(f"[DEBUG] SDK order response type: {type(order)}")
+                    logger.info(f"[DEBUG] SDK order response attributes: {dir(order)}")
                     
-                    failed_result = {
-                        'success': False,
-                        'error': error_msg,
-                        'error_details': error_details,
-                        'order_id': None,
-                        'mode': 'live_sdk_failed'
-                    }
-                    logger.error(f"[DEBUG] SDK failed result: {failed_result}")
-                    return failed_result
+                    # Extract order details from SDK response
+                    if hasattr(order, 'success') and order.success:
+                        order_id = getattr(order, 'order_id', f"sdk_order_{int(time.time())}")
+                        
+                        # Fetch order details to get actual filled price and fees
+                        filled_price = 0.0
+                        total_fees = 0.0
+                        try:
+                            order_details = self.get_order(order_id)
+                            if order_details:
+                                # Try to extract average fill price from order details
+                                if 'order' in order_details:
+                                    order_info = order_details['order']
+                                    # Check for filled value and size to calculate average price
+                                    total_value = float(order_info.get('total_value', {}).get('value', 0))
+                                    base_size = float(order_info.get('filled_base_volume', 0))
+                                    if base_size > 0:
+                                        filled_price = total_value / base_size
+                                        logger.info(f"[DEBUG] Fetched fill price: {filled_price} for order {order_id}")
+                                    # Extract total_fees from order details
+                                    total_fees = float(order_info.get('total_fees', 0))
+                                    logger.info(f"[DEBUG] Fetched fees: {total_fees} for order {order_id}")
+                        except Exception as e:
+                            logger.warning(f"[DEBUG] Could not fetch order details: {e}")
+                        
+                        # If still no price, try using client_order_id
+                        if filled_price == 0.0:
+                            try:
+                                client_order_id = f"bot_{int(time.time())}_{attempt}"
+                                order_details = self.get_order(client_order_id)
+                                if order_details and 'order' in order_details:
+                                    order_info = order_details['order']
+                                    total_value = float(order_info.get('total_value', {}).get('value', 0))
+                                    base_size = float(order_info.get('filled_base_volume', 0))
+                                    if base_size > 0:
+                                        filled_price = total_value / base_size
+                                        logger.info(f"[DEBUG] Fetched fill price via client_order_id: {filled_price}")
+                            except Exception as e:
+                                logger.warning(f"[DEBUG] Could not fetch via client_order_id: {e}")
+                        
+                        # Last resort: use current market price as fallback
+                        if filled_price == 0.0:
+                            try:
+                                ticker = self.get_product_ticker(product_id)
+                                if ticker and 'price' in ticker:
+                                    filled_price = float(ticker['price'])
+                                    logger.info(f"[DEBUG] Using market price as fallback: {filled_price}")
+                            except Exception:
+                                pass
+                        
+                        sdk_result = {
+                            'success': True,
+                            'order_id': order_id,
+                            'size': size,
+                            'price': filled_price,
+                            'fees': total_fees,
+                            'mode': 'live_sdk',
+                            'response_time': round(time.time() - order_start_time, 2)
+                        }
+                        logger.info(f"[DEBUG] SDK order SUCCESS: {sdk_result}")
+                        return sdk_result
+                    else:
+                        # SDK returned failure
+                        error_msg = 'Unknown error'
+                        error_details = 'No details'
+                        
+                        try:
+                            order_dict = order.to_dict() if hasattr(order, 'to_dict') else {}
+                            logger.error(f"[DEBUG] Full SDK order response: {order_dict}")
+                        except Exception as e:
+                            logger.error(f"[DEBUG] Could not convert order to dict: {e}")
+                        
+                        if hasattr(order, 'error_response') and order.error_response:
+                            err = order.error_response
+                            error_msg = getattr(err, 'message', getattr(err, 'error', 'Unknown error'))
+                            error_details = getattr(err, 'error_details', 'No details')
+                            logger.error(f"[DEBUG] SDK error_response: {err}")
+                        else:
+                            error_msg = getattr(order, 'message', 'Unknown error')
+                            error_details = getattr(order, 'error_details', 'No details')
+                        
+                        logger.error(f"[DEBUG] SDK order FAILED: {error_msg}")
+                        logger.error(f"[DEBUG] SDK error details: {error_details}")
+                        
+                        # Retry on failure
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            logger.info(f"[DEBUG] Retrying in {delay}s...")
+                            time.sleep(delay)
+                            continue
+                        
+                        failed_result = {
+                            'success': False,
+                            'error': error_msg,
+                            'error_details': error_details,
+                            'order_id': None,
+                            'mode': 'live_sdk_failed'
+                        }
+                        logger.error(f"[DEBUG] SDK failed result: {failed_result}")
+                        # Fall through to REST
 
-            except Exception as e:
-                logger.error(f"[DEBUG] SDK order EXCEPTION: {e}")
-                import traceback
-                logger.error(f"[DEBUG] SDK exception traceback: {traceback.format_exc()}")
-                # Fall back to REST implementation
+                except Exception as e:
+                    delay = base_delay * (2 ** attempt)
+                    logger.error(f"[DEBUG] SDK order EXCEPTION (attempt {attempt + 1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"[DEBUG] Retrying in {delay}s...")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"[DEBUG] SDK failed after {max_retries} attempts, falling back to REST")
+                        import traceback
+                        logger.error(f"[DEBUG] SDK exception traceback: {traceback.format_exc()}")
 
         # Fallback to REST implementation
         try:
             logger.info(f"[DEBUG] Attempting order via REST API...")
+            # Format size using product-specific precision
+            formatted_size = self._format_size_for_order(size, product_id)
             order_data = {
                 'client_order_id': f"bot_{int(time.time())}",
                 'product_id': product_id,
                 'side': side.upper(),  # API requires uppercase: BUY/SELL
                 'order_configuration': {
                     'market_market_ioc': {
-                        'base_size': str(size)
+                        'base_size': formatted_size
                     }
                 }
             }

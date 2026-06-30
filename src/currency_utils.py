@@ -34,9 +34,12 @@ class CurrencyConverter:
         # Default rates (will be overwritten by API)
         self._exchange_rates = {
             'USD': 1.0,
-            'GBP': 0.80,  # Default fallback
-            'EUR': 0.85   # Default fallback
+            'GBP': 0.78,  # Default fallback (~1 USD = 0.78 GBP)
+            'EUR': 0.92   # Default fallback
         }
+        
+        # Fetch rates on initialization
+        self._update_rates()
     
     def get_last_update(self) -> Optional[float]:
         """
@@ -112,10 +115,21 @@ class CurrencyConverter:
         symbol = self.CURRENCY_SYMBOLS.get(currency, currency)
         
         # Format with appropriate decimal places
-        if currency == 'USD' or currency == 'GBP':
+        # Show more precision for small amounts (less than £0.01)
+        if abs(amount) < 0.01 and amount != 0:
+            # Show up to 6 decimal places for very small amounts
+            formatted_amount = f"{amount:.6f}"
+        elif currency == 'USD' or currency == 'GBP':
             formatted_amount = f"{amount:.2f}"
         else:
             formatted_amount = f"{amount:.4f}"
+        
+        # Remove trailing zeros for very small amounts
+        if abs(amount) < 0.01 and amount != 0:
+            # Remove trailing zeros but keep at least 4 decimal places
+            formatted_amount = formatted_amount.rstrip('0').rstrip('.')
+            if '.' not in formatted_amount:
+                formatted_amount = f"{amount:.6f}"
         
         if include_symbol:
             return f"{symbol}{formatted_amount}"
@@ -124,7 +138,64 @@ class CurrencyConverter:
     
     def _update_rates(self) -> bool:
         """
-        Update exchange rates from API.
+        Update exchange rates - tries multi-source first, falls back to Coinbase API.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        # Try multi-source first for more accurate rates
+        if self._update_from_multi_source():
+            logger.info(f"Updated exchange rates from multi-source: {dict(self._exchange_rates)}")
+            return True
+        
+        # Fallback to Coinbase API
+        return self._update_from_coinbase_api()
+    
+    def _update_from_multi_source(self) -> bool:
+        """
+        Update exchange rates from multi-source price data.
+        
+        Derives GBP-USD rate from: (BTC-USD price / BTC-GBP price)
+        This uses the same aggregated prices as trading for consistency.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            from src.multi_source_pricer import get_multi_source_pricer
+            
+            pricer = get_multi_source_pricer()
+            
+            # Get BTC prices in both currencies
+            btc_gbp = pricer.get_consensus_price('BTC-GBP')
+            btc_usd = pricer.get_consensus_price('BTC-USD')
+            
+            if btc_gbp and btc_usd and btc_gbp.price > 0 and btc_usd.price > 0:
+                # Derive USD per GBP = USD price / GBP price
+                # Example: $73632 / £54300 = 1.356
+                usd_per_gbp = btc_usd.price / btc_gbp.price
+                gbp_per_usd = btc_gbp.price / btc_usd.price
+                
+                self._exchange_rates['GBP'] = gbp_per_usd
+                self._last_update = time.time()
+                
+                logger.info(
+                    f"Exchange rate from multi-source: "
+                    f"BTC-USD=${btc_usd.price:.2f} BTC-GBP=£{btc_gbp.price:.2f} "
+                    f"= {usd_per_gbp:.4f} USD/GBP"
+                )
+                return True
+            
+            logger.warning("Could not get multi-source prices for exchange rate")
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Multi-source exchange rate failed: {e}")
+            return False
+    
+    def _update_from_coinbase_api(self) -> bool:
+        """
+        Fallback: Update exchange rates from Coinbase API.
         
         Returns:
             True if successful, False otherwise
@@ -155,7 +226,7 @@ class CurrencyConverter:
                     self._exchange_rates[currency] = float(rate)
             
             self._last_update = time.time()
-            logger.info(f"Updated exchange rates: {dict(self._exchange_rates)}")
+            logger.info(f"Updated exchange rates from Coinbase API: {dict(self._exchange_rates)}")
             return True
             
         except Exception as e:

@@ -18,6 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire application
 COPY . .
 
+# Run database migrations before starting the app
+RUN python migrations/add_scale_out_columns.py
+RUN python migrations/add_scale_in_levels.py
+
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
 USER app
@@ -26,8 +30,8 @@ USER app
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/api/status')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/api/health')" || exit 1
 
-# Default command runs the unified dashboard with trading engine
-CMD ["python", "main.py", "--dashboard"]
+# Default command runs the startup script (trading + API workers)
+CMD ["python", "src/startup.py"]
