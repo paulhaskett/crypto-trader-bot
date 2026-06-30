@@ -50,13 +50,30 @@ class CoinbaseWebSocketClient:
         self._connected = False
         self._running = False
         self._thread = None
-        
+
         # Message callback for price updates
         self._on_price_update = None
-        
+
         # Load active trading pairs from settings
         from config.settings import settings
         self.active_pairs: list[str] = list(getattr(settings, 'PRODUCT_IDS', []))
+
+        # USD equivalents for model training (GBP depth too thin for altcoins)
+        def _usd(product_id: str) -> str | None:
+            return product_id.replace('-GBP', '-USD') if product_id.endswith('-GBP') else None
+
+        self.training_pairs: list[str] = []
+        for p in self.active_pairs:
+            usd = _usd(p)
+            if usd:
+                self.training_pairs.append(usd)
+
+        # All pairs the WS should track (live GBP pairs + USD training pairs)
+        self.ws_subscriptions: list[str] = self.active_pairs + self.training_pairs
+
+        logger.info(
+            f"WebSocket configured: live={self.active_pairs}, training={self.training_pairs}"
+        )
         
     def start(self, on_price_update=None):
         """
@@ -99,8 +116,8 @@ class CoinbaseWebSocketClient:
             self._connected = True
             logger.info("WebSocket connected")
             
-            # Subscribe to ticker channel for all active trading pairs
-            product_ids = self.active_pairs or ['BTC-GBP', 'ETH-GBP']
+            # Subscribe to ticker channel for all active GBP pairs plus USD training pairs
+            product_ids = self.ws_subscriptions or ['BTC-GBP', 'ETH-GBP']
             
             self._ws_client.subscribe(
                 product_ids=product_ids,

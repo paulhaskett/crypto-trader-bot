@@ -248,9 +248,8 @@ class MultiSourcePricer:
         """
         prices = {}
         
-        # 0. Try WebSocket first for active pairs - per slippage-modeling.md
-        # WebSocket provides real-time prices with minimal latency.
-        ws_pairs = getattr(self.websocket, 'active_pairs', []) if self.websocket else []
+        # 0. Try WebSocket first for any WS-subscribed pair (live GBP + USD training)
+        ws_pairs = getattr(self.websocket, 'ws_subscriptions', []) if self.websocket else []
         if product_id in ws_pairs:
             try:
                 ws_price = self._get_websocket_price(product_id)
@@ -324,8 +323,8 @@ class MultiSourcePricer:
         
         Per slippage-modeling.md: prioritize high-liquidity pairs with WebSocket.
         """
-        # Active pairs that benefit from WebSocket (dynamically loaded from settings)
-        ws_pairs = getattr(self.websocket, 'active_pairs', []) if self.websocket else []
+        # Active + training pairs that benefit from WebSocket (dynamically loaded)
+        ws_pairs = getattr(self.websocket, 'ws_subscriptions', []) if self.websocket else []
         
         if product_id not in ws_pairs:
             return None
