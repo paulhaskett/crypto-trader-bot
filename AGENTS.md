@@ -93,6 +93,37 @@
     ```
     Current status: Starting £157.44 → Current £136.41 = -£21.03 (-13.4%) - NOT ACHIEVED
 
+10. **Phantom positions from dust balances in wallet sync** - `initial_position_sync()` in `trading_engine.py` could create phantom open positions from sub-£1 dust balances (e.g. 0.00015 LTC worth £0.005). Caused by dust threshold (`> 0.00000001`) being absurdly low. The phantom position is permanently stuck because the v2.9.2 break-even guard prevents any trailing stop from closing it. **Fixed 2026-07-29**: Three guards added to `initial_position_sync()`:
+    - Wallet-zero check: closes phantom DB positions when the Coinbase wallet actually has zero balance
+    - Economic-value dust filter: skips positions worth < £1
+    - Entry_price sanity check: rejects prices > 2x or < 0.5x market price
+    ```python
+    MIN_POSITION_VALUE_GBP = 1.00
+    position_value = wallet_balance * current_price
+    if position_value < MIN_POSITION_VALUE_GBP:
+        logger.info(f"Skipping {product_id} — dust (~£{position_value:.2f})")
+        # Also closes any existing DB position for this product_id
+        continue
+    ```
+
+11. **Ensemble confidence mathematically capped by fake probabilities** - RidgeClassifier has no `predict_proba`, so `signals.py` substitutes a flat placeholder `[0.33, 0.34, 0.33]`. `ensemble.py:_calculate_confidence()` averaged the probas of ALL models — including dissenters and the fake flat proba — capping max confidence at `(1.0+1.0+0.33)/3 ≈ 0.78` and realistic values at 0.55–0.65, right at/below the 65% action threshold. **Result: the bot went dormant (zero BUYs May–Aug 2026)**; the 85% downtrend-buy threshold was unreachable. **Fixed 2026-08-21** in `_calculate_confidence()`:
+    ```python
+    # Skip models without real probabilities (flat placeholder)
+    if len(proba) > 0 and float(proba.max() - proba.min()) < 0.02:
+        continue
+    # Only average models that voted WITH the majority;
+    # disagreement is already penalized via agreement adjustment
+    if int(pred) != int(majority_vote):
+        continue
+    ```
+    Verified live: LINK-GBP SELL case 0.59 → 0.72. First cycle after deploy: ETH-GBP sold +10.2% (+£3.01) on AI SELL 71.9%, and first BUY since May (LINK-GBP).
+
+12. **ATR label config search was a no-op** - `training.py:_find_best_atr_config()` looped over 10 `{mult, min}` configs but never passed `cfg` into `create_labels()` — every iteration produced identical labels from global settings, and the "winning" config wasn't used for final training labels either. Also its cache key was `len(df)`, colliding across products with equal history length. **Fixed 2026-08-21**: `create_labels()` gained an `atr_config` override param, wired through the search loop, fallback loop, and final label generation; cache key changed to `(product_id, len(df))`.
+
+13. **Rolling accuracy TypeError every cycle** - `trading_loop.py` calls `ai_model._update_rolling_accuracy(product_id)` with one arg but the signature required three, throwing `TypeError` (caught, logged as warning) every cycle. **Fixed 2026-08-21**: `predictions` and `actual_direction` made `Optional`. Note the method body is still a no-op stub — `ENSEMBLE_WEIGHT_MODE='performance'` has no live accuracy feed yet (future work).
+
+14. **NEVER sell below break-even (user mandate)** - The v2.9.2 break-even guard (`current_price >= break_even` before any trailing-stop or AI SELL close) is a hard policy, not a tunable. The user explicitly rejected loss-taking exits, even for high-confidence AI SELL signals on deeply underwater positions (e.g. ADA at −20% with 74% SELL confidence stays held). AI SELL exits are therefore always profit-taking. Do not add carve-outs.
+
 ### Key Configuration
 
 | Setting | Value | Purpose |
@@ -2681,4 +2712,56 @@ Both thresholds must pass for a trade to execute:
 # Verify settings load
 python3 -c "from config.settings import settings; print(f'Vote: {settings.ENSEMBLE_VOTE_THRESHOLD}, Conf: {settings.MODEL_CONFIDENCE_THRESHOLD}')"
 # Expected: Vote: 0.75, Conf: 0.65
+```
+
+---
+
+## v2.9.3 - Break-Even Guard & Real-Time Trailing Stop
+
+**Date**: July 20, 2026
+
+### Problem
+
+Two issues with the trailing stop:
+
+1. **Stale peak_price causing loss sales**: `peak_price` in the database only ever increases — it records the all-time highest price since position open with no reset. When BTC peaked at £58,997 in May but dropped to £47,974 by July, the trailing stop (calculated at 98% of peak = £57,817) triggered a sell at a ~17% loss. The trailing stop had no guard against selling below break-even.
+
+2. **4-hour monitoring gap**: `monitor_positions()` only ran during the 4-hour trading cycle. Between checks, price could drop 17% below the trailing stop level, meaning the sell filled far below where it should have triggered.
+
+### Fix
+
+**Part 1 — Break-even guard (trading_engine.py)**:
+
+Added `current_price >= break_even` check before any trailing-stop close in both `monitor_positions()` and `on_websocket_price()`. The bot now:
+- Sells if above break-even and below trailing stop (locks in profit)
+- Holds if below break-even, even if trailing stop is technically hit (lets it ride)
+
+**Part 2 — Real-time trailing stop (trading_engine.py + trading_loop.py + websocket_client.py)**:
+
+- Added `TradingEngine.on_websocket_price(product_id, price)` — lightweight method registered as the WebSocket `on_price_update` callback. Runs on every price tick, updates peak_price in-memory, and triggers a sell immediately if trailing stop is hit.
+- Wiredup in `trading_loop.py` after `initial_position_sync()`.
+- Fixed `websocket_client.py:start()` to always set `_on_price_update` even if already running (was silently dropping the callback).
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `src/trading_engine.py` | Added `on_websocket_price()` method; break-even guard in both `monitor_positions()` and `on_websocket_price()` |
+| `src/trading_loop.py` | Wires WebSocket callback after initial sync |
+| `src/websocket_client.py` | `start()` now updates callback even if already running |
+| `src/templates/trades.html` | Fixed date parsing: replaced `split('T')` of `t.timestamp` with `t.date` / `t.timestamp` |
+
+### Verification
+
+```bash
+# Break-even guard present
+docker exec crypto-trader-bot grep -c "v2.9.2: Never sell below break-even" /app/src/trading_engine.py
+# Expected: 2 (monitor_positions + on_websocket_price)
+
+# Real-time trailing stop method exists
+docker exec crypto-trader-bot python3 -c "from src.trading_engine import trading_engine; print(type(trading_engine.on_websocket_price).__name__)"
+# Expected: method
+
+# BTC position still tracked
+curl -s http://localhost:8000/api/open_positions | python3 -c "import json,sys; btc=[p for p in json.load(sys.stdin).get('positions',[]) if 'BTC' in p['product_id']]; print(f'{btc[0][\"size\"]} @ {btc[0][\"entry_price\"]}') if btc else print('NONE')"
 ```

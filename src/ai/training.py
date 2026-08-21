@@ -44,7 +44,8 @@ class ModelTrainer:
         self._atr_config_cache = {}  # Cache ATR config per product
     
     def create_labels(self, df: pd.DataFrame, product_id: str,
-                      use_atr: bool = True, label_type: str = '3class') -> pd.Series:
+                      use_atr: bool = True, label_type: str = '3class',
+                      atr_config: Optional[Dict] = None) -> pd.Series:
         """
         Create target labels with ATR-based threshold.
         
@@ -53,6 +54,9 @@ class ModelTrainer:
             product_id: Trading pair
             use_atr: Use ATR-based threshold
             label_type: 'binary' or '3class'
+            atr_config: Optional {'mult': float, 'min': float} override.
+                        When provided, overrides the volatility-regime
+                        multiplier and ATR_MIN_THRESHOLD floor.
             
         Returns:
             Series of target labels
@@ -67,12 +71,17 @@ class ModelTrainer:
             price_change_pct = (future_series - close_series) / close_series
             
             if use_atr and 'atr' in df.columns:
-                vol_regime = self._get_volatility_regime(df)
-                effective_mult = vol_regime.get('effective_multiplier', settings.ATR_MULTIPLIER)
+                if atr_config is not None:
+                    effective_mult = atr_config['mult']
+                    min_threshold = atr_config['min']
+                else:
+                    vol_regime = self._get_volatility_regime(df)
+                    effective_mult = vol_regime.get('effective_multiplier', settings.ATR_MULTIPLIER)
+                    min_threshold = settings.ATR_MIN_THRESHOLD
                 
                 atr_series = df['atr']
                 threshold = (atr_series * effective_mult) / close_series
-                threshold = threshold.clip(lower=settings.ATR_MIN_THRESHOLD)
+                threshold = threshold.clip(lower=min_threshold)
             else:
                 threshold = pd.Series(settings.TRAINING_MIN_PROFIT_THRESHOLD, index=df.index)
             
@@ -180,13 +189,15 @@ class ModelTrainer:
         prices_full = df['close'].iloc[:min_len].values
         prices_test = prices_full[val_split:]
         
-        best_config = self._find_best_atr_config(df, X_train, y_train, prices_full[:val_split])
+        best_config = self._find_best_atr_config(df, X_train, y_train, prices_full[:val_split], product_id=product_id)
         
         if best_config is None:
             logger.error(f"No valid ATR config found for {product_id}")
             return {'error': 'No valid ATR configuration'}
         
-        targets = self.create_labels(df, product_id, use_atr=True, label_type='3class')
+        logger.info(f"Using ATR config for {product_id}: {best_config}")
+        targets = self.create_labels(df, product_id, use_atr=True, label_type='3class',
+                                     atr_config=best_config)
         y_train = targets.iloc[:val_split].values
         y_test = targets.iloc[val_split:].values
         
@@ -208,11 +219,11 @@ class ModelTrainer:
         return results
     
     def _find_best_atr_config(self, df: pd.DataFrame, X_train: np.ndarray, y_train: np.ndarray,
-                             prices_train: np.ndarray) -> Optional[Dict]:
+                             prices_train: np.ndarray, product_id: str = '') -> Optional[Dict]:
         """Find best ATR configuration by testing multiple thresholds."""
         
-        # Use data length as cache key - if same amount of data, use cached result
-        cache_key = len(df)
+        # Cache per product + data length (len(df) alone collides across products)
+        cache_key = (product_id, len(df))
         if cache_key in self._atr_config_cache:
             return self._atr_config_cache[cache_key]
         
@@ -241,7 +252,7 @@ class ModelTrainer:
         for cfg in atr_configs:
             try:
                 targets_test = self.create_labels(
-                    df, '', use_atr=True, label_type='3class'
+                    df, product_id, use_atr=True, label_type='3class', atr_config=cfg
                 )
                 
                 unique_classes = sorted(targets_test.unique())
@@ -274,7 +285,7 @@ class ModelTrainer:
         if best_config is None:
             for cfg in fallback_configs:
                 try:
-                    targets_test = self.create_labels(df, '', use_atr=True, label_type='3class')
+                    targets_test = self.create_labels(df, product_id, use_atr=True, label_type='3class', atr_config=cfg)
                     unique_classes = sorted(targets_test.unique())
                     if len(unique_classes) < 3:
                         continue

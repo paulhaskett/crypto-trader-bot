@@ -185,6 +185,16 @@ class EnsemblePredictor:
             for model_name, pred in zip(probas.keys(), vote_list):
                 try:
                     proba = np.array(probas[model_name]).flatten()
+                    # Skip models without real probabilities (flat placeholder
+                    # e.g. ridge's [0.33, 0.34, 0.33]) — they drag confidence
+                    # toward 0.33 and cap the ensemble below the 65% threshold.
+                    if len(proba) > 0 and float(proba.max() - proba.min()) < 0.02:
+                        continue
+                    # Only average models that voted WITH the majority;
+                    # disagreement is already penalized in _get_action()
+                    # via the agreement-based confidence adjustment.
+                    if int(pred) != int(majority_vote):
+                        continue
                     if majority_vote == CLASS_BUY and len(proba) > 2:
                         buyer_confs.append(float(proba[2]))
                     elif majority_vote == CLASS_SELL and len(proba) > 0:

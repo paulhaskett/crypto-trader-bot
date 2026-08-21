@@ -22,7 +22,7 @@ Usage:
     print(f"Action: {signal['action']}, Confidence: {signal['confidence']:.1%}")
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Base utilities and types
 from .base import (
@@ -287,7 +287,7 @@ class AIModel:
         
         return results
     
-    def _update_rolling_accuracy(self, product_id: str, predictions: Dict, actual_direction: str):
+    def _update_rolling_accuracy(self, product_id: str, predictions: Optional[Dict] = None, actual_direction: Optional[str] = None):
         """Update rolling accuracy tracking (no-op for now)."""
         pass
     
