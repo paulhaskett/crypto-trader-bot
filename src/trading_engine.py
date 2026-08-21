@@ -1,5 +1,4 @@
-"""
-Trading Engine module for crypto trading bot.
+"""Trading Engine module for crypto trading bot.
 
 This module orchestrates the complete trading workflow:
 - Signal generation from AI model
@@ -16,6 +15,7 @@ Educational Notes:
 
 import logging
 import time
+import threading
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import uuid
@@ -103,6 +103,8 @@ class TradingEngine:
 
         self.active_positions = {}
         self.last_trade_time = {}  # Initialize last trade time tracking
+        self._positions_lock = threading.Lock()  # Thread safety for WS callbacks
+        self._last_peak_sync = {}  # product_id -> timestamp, rate-limit DB peak updates
         
         # Load holdings from database
         self.holdings = {}
@@ -130,69 +132,147 @@ class TradingEngine:
         if self.paper_trading:
             logger.info("Skipping position sync - paper trading mode")
             return
-            
+
         logger.info("=== SYNC: Loading positions from Coinbase wallet ===")
-        
+
+        # Get current prices once for all value checks
+        current_prices = data_collector.get_current_prices()
+
+        # Pre-load existing DB positions so we can close phantom entries
+        existing_positions = db_manager.load_open_positions(trade_type='live') or {}
+
         # Clear existing active positions (will reload from DB after sync)
         self.active_positions = {}
-        
+
+        MIN_POSITION_VALUE_GBP = 1.00  # Skip positions worth less than £1 (dust guard)
+
         # Sync each product from Coinbase wallet
         for product_id in settings.PRODUCT_IDS:
             currency = product_id.split('-')[0]
             wallet_balance = coinbase_api.get_account_balance(currency)
-            
-            if wallet_balance > 0.00000001:
-                # Get cost basis
-                size, avg_cost = get_fifo_cost_basis(product_id)
-                
-                if avg_cost > 0:
-                    entry_price = avg_cost
-                else:
-                    entry_price = data_collector.get_current_prices().get(product_id, 0)
-                
-                # Check if position already exists in DB (avoid duplicates)
-                existing_positions = db_manager.load_open_positions(trade_type='live')
-                existing = existing_positions.get(product_id) if existing_positions else None
-                
-                if not existing:
-                    # Create new position from wallet (always use live for real trading)
-                    logger.info(f"SYNC: Creating {product_id} position from wallet: {wallet_balance} @ £{entry_price:.2f}")
-                    db_manager.save_open_position({
-                        'product_id': product_id,
-                        'side': 'buy',
-                        'size': wallet_balance,
-                        'remaining_size': wallet_balance,  # Set remaining size
-                        'entry_price': entry_price,
-                        'weighted_entry_price': entry_price,
-                        'peak_price': entry_price,  # Initialize peak to entry price
-                        'trade_type': 'live',  # Always live for real trading
-                        'status': 'open'
-                    })
-                else:
-                    # Update existing - preserve side, trade_type, position_id, AND opened_at
-                    logger.info(f"SYNC: Updating {product_id} from wallet: was {existing.get('size', 0)}, now {wallet_balance}")
-                    db_manager.save_open_position({
-                        'product_id': product_id,
-                        'position_id': existing.get('position_id'),  # PRESERVE UUID
-                        'side': existing.get('side', 'buy'),
-                        'size': wallet_balance,
-                        'remaining_size': wallet_balance,  # Update remaining size
-                        'entry_price': entry_price,
-                        'weighted_entry_price': entry_price,
-                        'peak_price': existing.get('peak_price', entry_price),  # Preserve existing peak or init to entry
-                        'opened_at': existing.get('opened_at'),  # PRESERVE original open date
-                        'trade_type': 'live'  # Ensure live for real trading
-                    })
-                
-                # Update holdings
-                self.holdings[product_id] = {
-                    'has_position': True,
-                    'entry_price': entry_price,
-                    'size': wallet_balance
-                }
-            else:
-                # No balance in wallet - clear position
+            current_price = current_prices.get(product_id, 0)
+
+            # --- DUST / phantom-position guard ---
+            # If wallet balance is essentially zero but DB thinks there's an open
+            # position, close the phantom immediately.
+            wallet_is_dust = wallet_balance <= 0.00000001
+
+            if wallet_is_dust:
+                existing = existing_positions.get(product_id)
+                if existing:
+                    logger.warning(
+                        f"SYNC: {product_id} has open position in DB (size={existing.get('size', 0)}) "
+                        f"but wallet balance is zero — closing phantom position"
+                    )
+                    db_manager.close_open_position(
+                        position_id=existing['position_id'],
+                        exit_price=current_price,
+                        pnl=0.0,
+                        reason="phantom_position_dust",
+                        exit_reason="phantom_position_dust"
+                    )
+                    # Remove from in-memory sync tracking
+                    if existing['position_id'] in self.active_positions:
+                        del self.active_positions[existing['position_id']]
+
                 self.holdings[product_id] = {'has_position': False, 'entry_price': 0, 'size': 0}
+                continue
+
+            # -- Economic-value dust filter --------------------------------
+            # Even if Coinbase reports a tiny non-zero balance (e.g. 0.00015 LTC
+            # from stale fills or API artifacts), skip it if the total value is
+            # below a meaningful threshold.  This prevents phantom positions from
+            # being created from dust.
+            position_value = wallet_balance * (current_price if current_price > 0 else 1)
+            if position_value < MIN_POSITION_VALUE_GBP:
+                logger.info(
+                    f"SYNC: Skipping {product_id} — wallet balance {wallet_balance} "
+                    f"worth ~£{position_value:.2f} is below minimum £{MIN_POSITION_VALUE_GBP} (dust)"
+                )
+                existing = existing_positions.get(product_id)
+                if existing:
+                    logger.warning(
+                        f"SYNC: {product_id} DB position (id={existing['position_id'][:8]}...) "
+                        f"worth ~£{position_value:.2f} also below minimum — closing"
+                    )
+                    db_manager.close_open_position(
+                        position_id=existing['position_id'],
+                        exit_price=current_price,
+                        pnl=0.0,
+                        reason="phantom_position_dust",
+                        exit_reason="phantom_position_dust"
+                    )
+                self.holdings[product_id] = {'has_position': False, 'entry_price': 0, 'size': 0}
+                continue
+
+            # --- Reasonable balance — compute cost basis ------------------
+            size, avg_cost = get_fifo_cost_basis(product_id)
+
+            if avg_cost > 0:
+                entry_price = avg_cost
+            else:
+                entry_price = current_price if current_price > 0 else wallet_balance  # last-resort fallback
+
+            # --- Sanity-check entry_price against market price -------------
+            # If entry_price is wildly different from the current market price
+            # (factor > 2 in either direction) and we have a current price to
+            # compare against, prefer the current price as the entry price.
+            # This catches stale/corrupt cost-basis data.
+            if current_price > 0:
+                price_ratio = entry_price / current_price
+                if price_ratio > 2.0 or price_ratio < 0.5:
+                    logger.warning(
+                        f"SYNC: {product_id} entry_price £{entry_price:.2f} is "
+                        f"{price_ratio:.1f}x current market price £{current_price:.2f} — "
+                        f"using market price as entry"
+                    )
+                    entry_price = current_price
+
+            # Check if position already exists in DB (avoid duplicates)
+            existing = existing_positions.get(product_id)
+
+            if not existing:
+                # Create new position from wallet (always use live for real trading)
+                logger.info(
+                    f"SYNC: Creating {product_id} position from wallet: "
+                    f"{wallet_balance} @ £{entry_price:.2f} (value £{position_value:.2f})"
+                )
+                db_manager.save_open_position({
+                    'product_id': product_id,
+                    'side': 'buy',
+                    'size': wallet_balance,
+                    'remaining_size': wallet_balance,
+                    'entry_price': entry_price,
+                    'weighted_entry_price': entry_price,
+                    'peak_price': entry_price,
+                    'trade_type': 'live',
+                    'status': 'open'
+                })
+            else:
+                # Update existing - preserve side, trade_type, position_id, AND opened_at
+                logger.info(
+                    f"SYNC: Updating {product_id} from wallet: was "
+                    f"{existing.get('size', 0)}, now {wallet_balance}"
+                )
+                db_manager.save_open_position({
+                    'product_id': product_id,
+                    'position_id': existing.get('position_id'),
+                    'side': existing.get('side', 'buy'),
+                    'size': wallet_balance,
+                    'remaining_size': wallet_balance,
+                    'entry_price': entry_price,
+                    'weighted_entry_price': entry_price,
+                    'peak_price': existing.get('peak_price', entry_price),
+                    'opened_at': existing.get('opened_at'),
+                    'trade_type': 'live'
+                })
+
+            # Update holdings
+            self.holdings[product_id] = {
+                'has_position': True,
+                'entry_price': entry_price,
+                'size': wallet_balance
+            }
         
         # NOW load all open positions from DB into active_positions
         logger.info("=== SYNC: Loading open positions into active_positions ===")
@@ -857,8 +937,15 @@ class TradingEngine:
                     if not should_close and position['side'] == 'buy':
                         if current_price <= trailing_stop:
                             if trailing_activated:
-                                should_close = True
-                                exit_reason = "Trailing stop hit"
+                                # v2.9.2: Never sell below break-even - the peak may be stale
+                                if current_price >= break_even:
+                                    should_close = True
+                                    exit_reason = "Trailing stop hit"
+                                else:
+                                    logger.info(
+                                        f"[TRAILING STOP] {product_id}: Below break-even (£{break_even:.2f}), "
+                                        f"holding. trailing_stop=£{trailing_stop:.2f} current=£{current_price:.2f}"
+                                    )
                             # v2.9.1: Emergency stop ONLY if already in profit (above break-even)
                             # Don't sell at a loss - let it ride until it recovers or hits break-even
                             elif current_price >= break_even and (entry_price - current_price) / entry_price > 0.02:
@@ -1173,6 +1260,108 @@ class TradingEngine:
             logger.error(f"Error in trading cycle: {e}")
 
         return cycle_results
+
+    def on_websocket_price(self, product_id: str, current_price: float):
+        """
+        Real-time trailing stop check called on every WebSocket price tick.
+
+        Runs in the WebSocket background thread. Updates peak_price in-memory
+        and triggers a sell immediately if the trailing stop is hit.
+        Keeps DB writes rate-limited to avoid hammering on every tick.
+        """
+        from config.settings import settings
+
+        with self._positions_lock:
+            # Find matching open position
+            for pos_id, position in list(self.active_positions.items()):
+                if position.get('product_id') != product_id:
+                    continue
+                if position.get('status') != 'open':
+                    continue
+                if position.get('side') != 'buy':
+                    continue
+
+                entry_price = position.get('entry_price', 0) or 0
+                if entry_price <= 0:
+                    continue
+
+                sell_size = position.get('remaining_size', position.get('size', 0)) or 0
+                if sell_size <= 0:
+                    continue
+
+                # --- Peak tracking (in-memory first, DB on change) ---
+                peak_price = position.get('peak_price', entry_price) or entry_price
+                if current_price > peak_price:
+                    peak_price = current_price
+                    position['peak_price'] = peak_price
+                    # Rate-limit DB writes to once per 30s per product
+                    now = time.time()
+                    last_sync = self._last_peak_sync.get(product_id, 0)
+                    if now - last_sync > 30:
+                        db_manager.update_peak_price(pos_id, peak_price)
+                        self._last_peak_sync[product_id] = now
+                        logger.debug(f"[WS PEAK] {product_id}: £{peak_price:.2f}")
+
+                # --- Trailing stop check (same logic as monitor_positions) ---
+                fees = db_manager.get_fee_rates()
+                if not fees:
+                    fees = coinbase_api.get_fees()
+                maker_fee = fees.get('maker_fee', settings.DEFAULT_MAKER_FEE)
+                taker_fee = fees.get('taker_fee', settings.DEFAULT_TAKER_FEE)
+                total_fee = maker_fee + taker_fee
+                break_even = entry_price * (1 + total_fee)
+
+                regime = position.get('regime', 'neutral')
+                trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
+
+                activation_threshold = break_even * (1 + settings.TRAILING_ACTIVATION_BUFFER)
+                trailing_activated = peak_price >= activation_threshold
+                position['trailing_activated'] = trailing_activated
+
+                trailing_stop = peak_price * (1 - trailing_pct)
+                stop_floor = break_even * (1 - trailing_pct)
+                trailing_stop = max(trailing_stop, stop_floor)
+
+                if current_price <= trailing_stop and trailing_activated:
+                    # v2.9.2: Never sell below break-even - the peak may be stale
+                    if current_price < break_even:
+                        logger.info(
+                            f"[WS TRAILING STOP] {product_id}: Below break-even (£{break_even:.2f}), "
+                            f"holding. stop=£{trailing_stop:.2f} current=£{current_price:.2f}"
+                        )
+                        return
+
+                    # Execute the sell immediately
+                    pnl = (current_price - entry_price) * sell_size
+                    logger.warning(
+                        f"[WS TRAILING STOP] TRIGGERED: {product_id} "
+                        f"current=£{current_price:.2f} <= stop=£{trailing_stop:.2f} "
+                        f"pnl=£{pnl:.2f} size={sell_size}"
+                    )
+
+                    if not self.paper_trading:
+                        try:
+                            order_result = self.execute_live_trade(product_id, 'sell', sell_size)
+                            logger.info(f"[WS TRAILING STOP] Sell order result: {order_result}")
+                        except Exception as e:
+                            logger.error(f"[WS TRAILING STOP] Failed to execute sell: {e}")
+                            return
+
+                    self._close_position(pos_id, pnl, "Trailing stop hit (real-time)", current_price)
+
+                    # Clear holdings
+                    if product_id in self.holdings:
+                        self.holdings[product_id] = {
+                            'has_position': False, 'entry_price': 0, 'size': 0
+                        }
+                    return  # Position closed, stop iterating
+
+                # Debug log every 60s at most (avoid spam on ticker)
+                logger.debug(
+                    f"[WS TRAILING STOP] {product_id}: "
+                    f"peak=£{peak_price:.2f} curr=£{current_price:.2f} "
+                    f"stop=£{trailing_stop:.2f} activated={trailing_activated}"
+                )
 
 
 # Global trading engine instance

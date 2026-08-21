@@ -83,7 +83,8 @@ class CoinbaseWebSocketClient:
             on_price_update: Optional callback function(product_id, price)
         """
         if self._running:
-            logger.warning("WebSocket already running")
+            self._on_price_update = on_price_update
+            logger.debug("WebSocket already running — updated on_price_update callback")
             return
         
         self._on_price_update = on_price_update

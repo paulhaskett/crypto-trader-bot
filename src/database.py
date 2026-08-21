@@ -308,6 +308,7 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 conn.execute(text("PRAGMA journal_mode=WAL"))
                 conn.execute(text("PRAGMA busy_timeout=30000"))
+                conn.execute(text("PRAGMA wal_autocheckpoint=100"))  # Checkpoint every ~400KB to prevent WAL bloat
                 conn.commit()
             
             self.SessionLocal = sessionmaker(
@@ -644,23 +645,31 @@ class DatabaseManager:
             session.close()
 
     def save_market_data(self, product_id: str, candles_df) -> bool:
-        """Save market data (candles) to the database."""
+        """Save market data (candles) to the database. Uses INSERT OR IGNORE to prevent duplicates."""
         session = self.get_session()
         try:
-            market_data_records = []
+            # Use raw SQL with INSERT OR IGNORE for performance and dedup
+            # The UNIQUE(product_id, timestamp) constraint prevents duplicates
+            conn = session.connection().connection
+            records = []
             for timestamp, row in candles_df.iterrows():
-                market_data_records.append(MarketData(
-                    product_id=product_id,
-                    timestamp=timestamp.to_pydatetime(),
-                    open_price=row['open'],
-                    high_price=row['high'],
-                    low_price=row['low'],
-                    close_price=row['close'],
-                    volume=row['volume']
+                records.append((
+                    product_id,
+                    timestamp.to_pydatetime(),
+                    row['open'],
+                    row['high'],
+                    row['low'],
+                    row['close'],
+                    row['volume']
                 ))
-            session.add_all(market_data_records)
-            session.commit()
-            logger.info(f"Saved {len(market_data_records)} market data records for {product_id}")
+            conn.executemany(
+                "INSERT OR IGNORE INTO market_data "
+                "(product_id, timestamp, open_price, high_price, low_price, close_price, volume) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                records
+            )
+            conn.commit()
+            logger.info(f"Saved {len(records)} market data records for {product_id}")
             return True
         except Exception as e:
             session.rollback()

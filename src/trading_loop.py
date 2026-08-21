@@ -104,7 +104,15 @@ class TradingProcess:
             logger.info("Initial position sync completed")
         except Exception as e:
             logger.error(f"Initial sync failed: {e}")
-        
+
+        # Start real-time trailing stop monitoring via WebSocket
+        try:
+            from src.websocket_client import start_websocket_prices
+            start_websocket_prices(on_price_update=trading_engine.on_websocket_price)
+            logger.info("WebSocket real-time trailing stop monitoring started")
+        except Exception as e:
+            logger.error(f"Failed to start WebSocket trailing stop: {e}")
+
         # Run initial cycle
         logger.info("Running initial trading cycle...")
         try:

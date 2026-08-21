@@ -371,7 +371,10 @@
         async function changeCurrency(c) {
             state.currency = c;
             showToast(`Currency: ${c}`, 'success');
-            await Promise.all([updateStatus(), updateSummary(), updateSignals()]);
+            // Update fast endpoints first, then slower ones in background
+            await Promise.all([updateStatus()]);
+            updateSummary();
+            updateSignals();
         }
 
         async function refreshExchangeRate() {
@@ -684,8 +687,12 @@
         }
 
         async function init() {
-            await Promise.all([updateStatus(), updateSummary(), updateSignals(), updatePositions(), updateGbpBalance(), updateCountdown(), updateResources()]);
+            // Fast endpoints first - hide overlay immediately so user sees cards populate
+            await Promise.all([updateStatus(), updatePositions(), updateGbpBalance(), updateCountdown(), updateResources()]);
             document.getElementById('loading-overlay').style.display = 'none';
+            // Slower endpoints populate cards in background
+            updateSummary();
+            updateSignals();
         }
 
         document.getElementById('trades-accordion').addEventListener('shown.bs.collapse', () => { 

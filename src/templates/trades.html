@@ -259,10 +259,8 @@
 
                 if (tradesRes?.trades) {
                     tradesRes.trades.forEach(t => {
-                        const ts = t.timestamp || '';
-                        const parts = ts.split('T');
-                        const dateStr = parts[0] || '';
-                        const timeStr = parts[1] ? parts[1].substring(0, 5) : '';
+                        const dateStr = t.date || '';
+                        const timeStr = t.timestamp || '';
                         allTrades.push({
                             product_id: t.product_id,
                             side: t.side,
