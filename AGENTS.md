@@ -1123,6 +1123,16 @@ Through analysis of portfolio performance decline, several critical issues were 
 
 ### Bug Fixes Applied
 
+#### v3.0 (2026-08-22) — Dynamic ATR Trailing Stop + Momentum Protection
+**Issue**: User reported positions "closing too early and missing profit when the price goes up after it sells." Root cause: a single fixed 2% trailing stop was applied to every asset/regime regardless of volatility, and trailing could fire during a strong uptrend, exiting into momentum.
+
+**Fix** (`src/trading_engine.py`, `_monitor_positions` / position loop, ~line 884):
+1. **Dynamic trailing width** — `trailing_pct = min(0.05, max(2% fixed, 2.5 × ATR%, regime_stop))`. ATR is computed from 7 days of hourly candles via `calculate_atr(period=settings.ATR_PERIOD)`. Wider stops for volatile assets, capped at 5% to limit giveback. Logs `[ATR TRAILING]`.
+2. **Momentum protection** — `skip_trailing=True` when RSI(14) > 70 AND price > MA20 AND price > MA50 (strong uptrend), OR when price is within 1% of peak. Prevents selling into a running uptrend. Logs `[MOMENTUM PROTECT]`.
+3. **Break-even guard preserved** — All exits still respect the hard v2.9.2 rule: never sell below break-even (`current_price >= break_even`). ATR/momentum only *widen* or *defer* the stop; they never force a loss.
+
+**Verified live (2026-08-22)**: ADA-GBP and BTC-GBP both below break-even → correctly held (`activated=False`), ATR stops computed (ADA atr_pct=0.43%, BTC atr_pct=0.08%, both floored to 2%). Container healthy after restart.
+
 #### 1. Duplicate Trade Records
 **Issue**: Trades were saved twice - once in `execute_live_trade()` and again in `_close_position()`.
 

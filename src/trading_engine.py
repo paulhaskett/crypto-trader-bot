@@ -27,6 +27,7 @@ from src.data_collector import data_collector
 from src.coinbase_api import coinbase_api
 from src.database import db_manager
 from src.cache_manager import write_signal_cache
+from src.feature_engineering import add_temporal_features, add_volume_price_divergence, calculate_atr
 from typing import Tuple
 
 logger = logging.getLogger(__name__)
@@ -881,11 +882,45 @@ class TradingEngine:
                     total_fee = maker_fee + taker_fee
 
                     # Calculate break-even (covers fees)
+                    # Calculate break-even (covers fees)
                     break_even = entry_price * (1 + total_fee)
 
-                    # Get regime and trailing stop percentage (2% as requested)
+                    # Get regime for context
                     regime = position.get('regime', 'neutral')
-                    trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
+
+                    # =====================================================
+                    # DYNAMIC ATR-BASED TRAILING STOP (v3.0)
+                    # =====================================================
+                    hist_df = None
+                    try:
+                        hist_df = data_collector.collect_historical_data(product_id, days=7)
+                        if hist_df is not None and not hist_df.empty and 'high' in hist_df.columns and 'low' in hist_df.columns:
+                            atr_series = calculate_atr(hist_df, period=settings.ATR_PERIOD)
+                            current_atr = float(atr_series.iloc[-1]) if len(atr_series) > 0 else 0.0
+
+                            # ATR as percentage of price
+                            atr_pct = current_atr / current_price if current_price > 0 else 0.0
+
+                            # Dynamic trailing stop: max(fixed 2%, 2.5x ATR, regime-specific)
+                            # Adapts to volatility - wider stops in high vol, tighter in low vol
+                            atr_based_stop = atr_pct * 2.5
+                            fixed_stop = settings.TRAILING_STOP_PERCENT
+                            regime_stop = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
+
+                            trailing_pct = max(fixed_stop, atr_based_stop, regime_stop)
+                            # Cap at 5% to prevent excessive giveback
+                            trailing_pct = min(trailing_pct, 0.05)
+
+                            logger.info(f"[ATR TRAILING] {product_id}: atr={current_atr:.4f} atr_pct={atr_pct:.4f} atr_stop={atr_based_stop:.4f} fixed={fixed_stop:.4f} final={trailing_pct:.4f}")
+                        else:
+                            trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
+                            current_atr = 0.0
+                            atr_pct = 0.0
+                    except Exception as e:
+                        logger.warning(f"[ATR TRAILING] {product_id}: Failed to calculate ATR, using fixed: {e}")
+                        trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
+                        current_atr = 0.0
+                        atr_pct = 0.0
 
                     # Track peak unconditionally (always update if higher)
                     peak_price = position.get('peak_price', entry_price)
@@ -899,7 +934,6 @@ class TradingEngine:
                             logger.error(f"[PEAK_UPDATE] FAILED for {product_id}: position_id={position_id}")
 
                     # Check if trailing stop is "activated" (price has been above break-even + buffer)
-                    # This means we've covered fees + buffer and can start locking in profits
                     activation_threshold = break_even * (1 + settings.TRAILING_ACTIVATION_BUFFER)
                     trailing_activated = peak_price >= activation_threshold
                     position['trailing_activated'] = trailing_activated
@@ -907,10 +941,37 @@ class TradingEngine:
                     # Calculate trailing stop (always calculate)
                     trailing_stop = peak_price * (1 - trailing_pct)
                     # v2.9.1: Floor is break-even minus buffer, NOT 95% of entry
-                    # This prevents triggering when price is between entry and break-even
                     stop_floor = break_even * (1 - trailing_pct)
                     trailing_stop = max(trailing_stop, stop_floor)
-                    
+
+                    # =====================================================
+                    # MOMENTUM CHECK - Don't trail out of a strong uptrend
+                    # =====================================================
+                    skip_trailing = False
+                    if hist_df is not None and not hist_df.empty and len(hist_df) >= 14:
+                        try:
+                            delta = hist_df['close'].diff()
+                            gain = delta.where(delta > 0, 0.0)
+                            loss = (-delta).where(delta < 0, 0.0)
+                            avg_gain = gain.rolling(window=14, min_periods=14).mean()
+                            avg_loss = loss.rolling(window=14, min_periods=14).mean()
+                            rs = avg_gain / avg_loss.replace(0, 0.0001)
+                            rsi = 100 - (100 / (1 + rs))
+                            current_rsi = float(rsi.iloc[-1]) if len(rsi) > 0 else 50.0
+
+                            short_ma = hist_df['close'].rolling(20).mean().iloc[-1]
+                            long_ma = hist_df['close'].rolling(50).mean().iloc[-1]
+
+                            # Skip trailing if RSI > 70 AND price above MA20+MA50 (strong uptrend)
+                            if current_rsi > 70 and current_price > short_ma and current_price > long_ma:
+                                skip_trailing = True
+                                logger.info(f"[MOMENTUM PROTECT] {product_id}: Skipping trailing - RSI={current_rsi:.1f}, price > MA20/MA50 (strong uptrend)")
+                            elif (peak_price - current_price) / peak_price < 0.01:
+                                skip_trailing = True
+                                logger.info(f"[MOMENTUM PROTECT] {product_id}: Skipping trailing - within 1% of peak (£{peak_price:.2f})")
+                        except Exception as e:
+                            logger.warning(f"[MOMENTUM CHECK] {product_id}: Failed: {e}")
+
                     # =====================================================
                     # CHECK AI SELL SIGNALS FOR EXISTING POSITIONS
                     # =====================================================
@@ -919,10 +980,10 @@ class TradingEngine:
                             signal = ai_model.get_signal(product_id)
                             signal_action = signal.get('action', 'HOLD')
                             signal_confidence = signal.get('confidence', 0.0)
-                            
+
                             if signal_action == 'SELL':
                                 profit_pct = (current_price - entry_price) / entry_price
-                                # Only close if in profit (above break-even) or minimum profit threshold
+                                # Only close if in profit (above break-even)
                                 min_profit_pct = 0.01  # 1% minimum profit
                                 if current_price >= break_even or profit_pct >= min_profit_pct:
                                     should_close = True
@@ -933,8 +994,8 @@ class TradingEngine:
                         except Exception as e:
                             logger.warning(f"[AI SELL] Could not get signal for {product_id}: {e}")
 
-                    # Check if trailing stop is hit
-                    if not should_close and position['side'] == 'buy':
+                    # Check if trailing stop is hit (respecting momentum protection)
+                    if not should_close and position['side'] == 'buy' and not skip_trailing:
                         if current_price <= trailing_stop:
                             if trailing_activated:
                                 # v2.9.2: Never sell below break-even - the peak may be stale
@@ -946,8 +1007,6 @@ class TradingEngine:
                                         f"[TRAILING STOP] {product_id}: Below break-even (£{break_even:.2f}), "
                                         f"holding. trailing_stop=£{trailing_stop:.2f} current=£{current_price:.2f}"
                                     )
-                            # v2.9.1: Emergency stop ONLY if already in profit (above break-even)
-                            # Don't sell at a loss - let it ride until it recovers or hits break-even
                             elif current_price >= break_even and (entry_price - current_price) / entry_price > 0.02:
                                 should_close = True
                                 exit_reason = "Emergency stop (2% drop from entry, was above break-even)"
@@ -956,16 +1015,15 @@ class TradingEngine:
                         if current_price >= trailing_stop and current_price <= entry_price:
                             should_close = True
                             exit_reason = "Trailing stop hit"
-                    
-                    if not should_close:
-                        logger.info(f"[TRAILING STOP] {product_id}: Not triggered. trailing_stop=£{trailing_stop:.2f} current=£{current_price:.2f} activated={trailing_activated}")
 
-                    # Log for debugging
+                    if not should_close:
+                        logger.info(f"[TRAILING STOP] {product_id}: Not triggered. trailing_stop=£{trailing_stop:.2f} current=£{current_price:.2f} activated={trailing_activated} skip={skip_trailing}")
+
                     logger.info(
                         f"[TRAILING STOP] {product_id}: "
                         f"entry={entry_price:.2f} peak={peak_price:.2f} current={current_price:.2f} "
                         f"break_even={break_even:.2f} trailing_stop={trailing_stop:.2f} "
-                        f"trailing_pct={trailing_pct:.0%} activated={trailing_activated}"
+                        f"trailing_pct={trailing_pct:.1%} activated={trailing_activated} atr={current_atr:.4f}"
                     )
 
                     # =====================================================
