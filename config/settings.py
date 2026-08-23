@@ -133,6 +133,13 @@ class Settings:
     # the trailing stop — positions could sit "pending" for hours when only
     # 0.5-1% from activation. User direction 2026-08-23: arm at break-even.
     TRAILING_ACTIVATION_BUFFER: float = 0.0
+    # Min profit locked-in before the trailing stop can actually fire.
+    # The trailing stop becomes active at peak>=BE, but won't close the
+    # position until the worst-case sell (at trailing_stop = peak*0.98)
+    # yields at least this much profit vs entry. Prevents selling on tiny
+    # dip-then-recover patterns that lock in insufficient profit. User
+    # direction 2026-08-23: require 1% locked-in before trailing stop fires.
+    MIN_LOCKED_PROFIT_FOR_SELL: float = 0.02  # 2% profit vs entry required (must exceed 1.1% total fee to bind above BE)
     
     # v2.4: Per-regime trailing stop (matches MIN_PROFIT thresholds)
     # Trailing stop only activates when price is above break-even (covering fees)

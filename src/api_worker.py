@@ -966,6 +966,9 @@ async def get_open_positions():
                 # v2.9.1: Floor is break-even minus buffer, NOT 95% of entry
                 stop_floor = break_even * (1 - trailing_pct)
                 trailing_stop = max(trailing_stop, stop_floor)
+                # v3.4: Raise trailing stop to require min locked-in profit before it can fire
+                min_trail_stop = entry_price_calc * (1 + settings.MIN_LOCKED_PROFIT_FOR_SELL)
+                trailing_stop = max(trailing_stop, min_trail_stop)
                 
                 # Only activate trailing stop after break-even + buffer is reached (once activated, stays active)
                 # Use peak_price to check if we've ever been above break-even + buffer

@@ -944,6 +944,12 @@ class TradingEngine:
                     stop_floor = break_even * (1 - trailing_pct)
                     trailing_stop = max(trailing_stop, stop_floor)
 
+                    # v3.4: Require minimum locked-in profit before trailing stop
+                    # can actually fire. The stop level rises to entry × (1 + min_locked_profit)
+                    # so worst-case execution still locks in min_locked_profit %.
+                    min_trail_stop = entry_price * (1 + settings.MIN_LOCKED_PROFIT_FOR_SELL)
+                    trailing_stop = max(trailing_stop, min_trail_stop)
+
                     # =====================================================
                     # MOMENTUM CHECK - Don't trail out of a strong uptrend
                     # =====================================================
@@ -1398,6 +1404,12 @@ class TradingEngine:
                 trailing_stop = peak_price * (1 - trailing_pct)
                 stop_floor = break_even * (1 - trailing_pct)
                 trailing_stop = max(trailing_stop, stop_floor)
+
+                # v3.4: Require minimum locked-in profit before trailing stop
+                # can actually fire. The stop level rises to entry × (1 + min_locked_profit)
+                # so worst-case execution still locks in min_locked_profit %.
+                min_trail_stop = entry_price * (1 + settings.MIN_LOCKED_PROFIT_FOR_SELL)
+                trailing_stop = max(trailing_stop, min_trail_stop)
 
                 if trigger_price <= trailing_stop and trailing_activated:
                     # v2.9.2: Never sell below break-even - the peak may be stale
