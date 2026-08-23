@@ -135,7 +135,7 @@
 |---------|-------|---------|
 | Taker Fee | 0.75% | Actual Coinbase fee, NOT fallback 1.2% |
 | Maker Fee | 0.35% | Actual Coinbase fee, NOT fallback 0.6% |
-| Trailing Stop | 2% | Percentage below peak |
+| Trailing Stop | 0.5% min + ATR*2.5 + 5% cap | Adaptive per pair via volatility (v3.6) |
 | Trailing Activation Buffer | 0% | Arms the moment peak crosses break-even (v3.3, was 2%) |
 | Min Locked Profit for Sell | 0.5% | Worst-case execution must yield ≥0.5% profit vs entry (v3.5, was 2%) |
 | Model Confidence Threshold | 65% | Minimum confidence for signals |
