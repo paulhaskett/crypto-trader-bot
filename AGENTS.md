@@ -8,9 +8,11 @@
 
 1. **`trailing_activated` undefined** - In `trading_engine.py:monitor_positions()`, the variable `trailing_activated` must be defined before use:
    ```python
-   trailing_activated = peak_price >= break_even
+   # Pre-v3.3 (buffer=2%): trailing_activated = peak_price >= break_even * 1.02
+   # v3.3+ (buffer=0): trailing_activated = peak_price >= break_even
+   trailing_activated = peak_price >= activation_threshold  # activation_threshold = break_even × (1 + TRAILING_ACTIVATION_BUFFER)
    ```
-   Without this, you get `NameError: name 'trailing_activated' is not defined`
+   Without this, you get `NameError: name 'trailing_activated' is not defined`.
 
 2. **Fee parsing failure** - SDK returns `GetTransactionSummaryResponse` object, NOT dict:
    ```python
@@ -52,6 +54,7 @@
    stop_floor = break_even * (1 - trailing_pct)
    trailing_stop = max(trailing_stop, stop_floor)
    ```
+   > **v3.3 trade-off**: Because the floor sits at `break_even × 0.98` (always below break-even), and the v2.9.2 guard blocks any sell below break-even, the trailing stop can only fire once peak is high enough that `peak × 0.98 > break_even` — i.e., peak > break_even × ~1.02. Below that threshold the trailing stop is technically armed but practically inert (the guard holds). For positions just barely activated, this means the trailing stop waits for ~2% more upside before it can lock profit. This is the correct trade-off under the no-realized-loss mandate — don't add carve-outs.
 
 7. **Peak price not persisting** - When updating `peak_price` in `monitor_positions()`, always log the result:
     ```python
@@ -124,6 +127,8 @@
 
 14. **NEVER sell below break-even (user mandate)** - The v2.9.2 break-even guard (`current_price >= break_even` before any trailing-stop or AI SELL close) is a hard policy, not a tunable. The user explicitly rejected loss-taking exits, even for high-confidence AI SELL signals on deeply underwater positions (e.g. ADA at −20% with 74% SELL confidence stays held). AI SELL exits are therefore always profit-taking. Do not add carve-outs.
 
+15. **Dashboard `trailing_activated` must require current_price >= break_even** - The `/api/open_positions` endpoint sets `trailing_activated = peak_activated and current_price >= break_even`. Showing "Active" for any position whose peak merely crossed break-even (even when current is far underwater) was misleading — ADA-GBP was -7% underwater for 3 months yet displayed "Active". The trailing stop can only fire profitably when the position is actually in the profit zone. Don't revert this to peak-only; it caused confusion on the dashboard.
+
 ### Key Configuration
 
 | Setting | Value | Purpose |
@@ -131,9 +136,11 @@
 | Taker Fee | 0.75% | Actual Coinbase fee, NOT fallback 1.2% |
 | Maker Fee | 0.35% | Actual Coinbase fee, NOT fallback 0.6% |
 | Trailing Stop | 2% | Percentage below peak |
-| Trailing Activation Buffer | 2% | Must be 2% above break-even to activate |
+| Trailing Activation Buffer | 0% | Arms the moment peak crosses break-even (v3.3, was 2%) |
 | Model Confidence Threshold | 65% | Minimum confidence for signals |
-| Break-even | entry × 1.0075 | Price needed to cover fees |
+| Break-even | entry × 1.011 | entry + 1.1% (0.35% maker + 0.75% taker, DB fees) |
+
+> **Trailing-stop note (v3.3)**: Activation buffer dropped from 2% to 0% on 2026-08-23 because positions could sit "pending" for hours when only 0.5–1% from activation. The v2.9.2 break-even guard (`current_price >= break_even` before any sell) still enforces no-loss exits. As a side effect, the trailing stop can only fire profitably once peak is high enough that `peak × 0.98 > break_even`, i.e. peak > break_even × 1.0204 (~2% above break-even). Below that, the trailing stop sits at `max(peak × 0.98, break_even × 0.98)` and the guard holds — by design.
 
 ---
 
