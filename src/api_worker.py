@@ -970,7 +970,12 @@ async def get_open_positions():
                 # Only activate trailing stop after break-even + buffer is reached (once activated, stays active)
                 # Use peak_price to check if we've ever been above break-even + buffer
                 activation_threshold = break_even * (1 + settings.TRAILING_ACTIVATION_BUFFER)
-                trailing_activated = peak_price >= activation_threshold
+                peak_activated = peak_price >= activation_threshold
+                # v3.3.1: Dashboard shows "active" only when price is actually in the
+                # profit zone (current >= break-even). Otherwise show "pending" even
+                # if peak crossed BE momentarily — the v2.9.2 guard would block any
+                # sell below break-even anyway, so "active" was misleading.
+                trailing_activated = peak_activated and current_price >= break_even
                 
                 rows.append({
                     'product_id': product_id,
