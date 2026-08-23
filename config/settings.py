@@ -92,14 +92,22 @@ class Settings:
     BUY_MAX_ATTEMPTS_PER_DAY: int = 1  # Maximum 1 buy attempt per pair per day
 
     # Position Scaling (Averaging Down) - Single Scale-In (lowest fees)
-    SCALE_IN_ENABLED: bool = True  # Enable scale-in (averaging down)
-    SCALE_IN_LEVELS: list = [2.0]  # Single trigger level (neutral)
+    # Policy (user direction 2026-08-23): scale in ONCE per pair at the trough,
+    # only when AI confirms it's likely to bounce. Flat 3% drop threshold across
+    # all regimes — no eager scaling in bull-market micro-dips, save GBP for the
+    # genuine trough.
+    SCALE_IN_ENABLED: bool = True
+    SCALE_IN_LEVELS: list = [3.0]  # Single trigger level — flat 3% within "scale-in gate"
     SCALE_IN_SIZE_BY_LEVEL: list = [1.0]  # 100% of original position size (single trade)
-    MAX_SCALE_INS_PER_POSITION: int = 1  # Max 1 scale-in per position
-    SCALE_IN_COOLDOWN_HOURS: int = 4  # Minimum hours between scale-ins
+    MAX_SCALE_INS_PER_POSITION: int = 1  # Max 1 scale-in per position (trough-only)
+    SCALE_IN_COOLDOWN_HOURS: int = 4  # Minimum hours between scale-ins (safety)
     SCALE_IN_GLOBAL_BLOCK: bool = False  # Emergency stop - block all scale-ins
     SCALE_IN_MAX_GBP_PER_CYCLE: float = 15.0  # Max GBP spent on scale-ins per cycle
-    SCALE_IN_MIN_SIGNAL_CONFIDENCE: float = 0.60  # Min AI signal confidence to scale-in
+    SCALE_IN_MIN_SIGNAL_CONFIDENCE: float = 0.65  # Match BUY entry threshold (consistent conviction)
+    # Regime-keyed trigger levels — kept at 3% across all regimes (flat rule)
+    SCALE_IN_LEVELS_BEAR: list = [3.0]       # Downtrend: trigger at 3% drop
+    SCALE_IN_LEVELS_NEUTRAL: list = [3.0]    # Neutral: trigger at 3% drop (was 2.0)
+    SCALE_IN_LEVELS_BULL: list = [3.0]       # Uptrend: trigger at 3% drop (was 1.0)
     
     # Position Scaling (Taking Profits) - Scale-Out
     SCALE_OUT_ENABLED: bool = False  # Disable - prevent early selling
@@ -140,9 +148,11 @@ class Settings:
     SCALE_OUT_MIN_PROFIT_BULL: float = 0.10    # Strong Uptrend: scale out at 10%+
     
     # Regime-based scale-in levels (single trigger - lowest fees)
+    # Flat 3% across all regimes — user policy 2026-08-23: no eager bull-market
+    # scale-ins; only fire at the trough, never on micro-dips.
     SCALE_IN_LEVELS_BEAR: list = [3.0]       # Downtrend: trigger at 3% drop
-    SCALE_IN_LEVELS_NEUTRAL: list = [2.0]   # Neutral: trigger at 2% drop
-    SCALE_IN_LEVELS_BULL: list = [1.0]      # Uptrend: trigger at 1% drop
+    SCALE_IN_LEVELS_NEUTRAL: list = [3.0]    # Neutral: trigger at 3% drop
+    SCALE_IN_LEVELS_BULL: list = [3.0]       # Uptrend: trigger at 3% drop
 
     # AI/ML Configuration
     MODEL_CONFIDENCE_THRESHOLD: float = 0.65  # 65% - reduce signals
