@@ -128,7 +128,11 @@ class Settings:
     
     TRAILING_STOP_ENABLED: bool = True  # Enable trailing stop protection
     TRAILING_STOP_PERCENT: float = 0.02  # 2% trailing stop (user request)
-    TRAILING_ACTIVATION_BUFFER: float = 0.02  # 2% above break-even to activate trailing
+    # Activation at break-even (was 2% buffer). The v2.9.2 guard already prevents
+    # ever selling below break-even, so the extra 2% buffer just delayed arming
+    # the trailing stop — positions could sit "pending" for hours when only
+    # 0.5-1% from activation. User direction 2026-08-23: arm at break-even.
+    TRAILING_ACTIVATION_BUFFER: float = 0.0
     
     # v2.4: Per-regime trailing stop (matches MIN_PROFIT thresholds)
     # Trailing stop only activates when price is above break-even (covering fees)
