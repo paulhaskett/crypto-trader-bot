@@ -94,6 +94,16 @@ class TradingProcess:
         logger.info("TRADING PROCESS STARTING")
         logger.info("=" * 60)
         
+        # Load persisted user settings from DB (interval, thresholds, etc.)
+        # so the trade loop honors dashboard/API changes instead of hardcoded defaults.
+        try:
+            settings.load_from_db()
+            logger.info(f"Settings loaded from DB: interval={settings.MARKET_CHECK_INTERVAL}s "
+                        f"({settings.MARKET_CHECK_INTERVAL/60:.0f}min), "
+                        f"confidence={settings.MODEL_CONFIDENCE_THRESHOLD}")
+        except Exception as e:
+            logger.error(f"Failed to load settings from DB (using defaults): {e}")
+        
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
         
@@ -125,6 +135,9 @@ class TradingProcess:
         
         while self.running:
             try:
+                # Re-read interval each iteration so live changes (via API/DB) apply
+                # without needing a process restart.
+                interval = settings.MARKET_CHECK_INTERVAL
                 elapsed = time.time() - self.last_cycle_time
                 
                 if elapsed < interval:
