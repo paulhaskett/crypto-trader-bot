@@ -137,10 +137,11 @@
 | Maker Fee | 0.35% | Actual Coinbase fee, NOT fallback 0.6% |
 | Trailing Stop | 2% | Percentage below peak |
 | Trailing Activation Buffer | 0% | Arms the moment peak crosses break-even (v3.3, was 2%) |
+| Min Locked Profit for Sell | 2% | Worst-case execution must yield ≥2% profit vs entry (v3.4) |
 | Model Confidence Threshold | 65% | Minimum confidence for signals |
 | Break-even | entry × 1.011 | entry + 1.1% (0.35% maker + 0.75% taker, DB fees) |
 
-> **Trailing-stop note (v3.3)**: Activation buffer dropped from 2% to 0% on 2026-08-23 because positions could sit "pending" for hours when only 0.5–1% from activation. The v2.9.2 break-even guard (`current_price >= break_even` before any sell) still enforces no-loss exits. As a side effect, the trailing stop can only fire profitably once peak is high enough that `peak × 0.98 > break_even`, i.e. peak > break_even × 1.0204 (~2% above break-even). Below that, the trailing stop sits at `max(peak × 0.98, break_even × 0.98)` and the guard holds — by design.
+> **Trailing-stop note (v3.4)**: The trailing stop now bottoms at `max(peak × 0.98, break_even × 0.98, entry × (1 + MIN_LOCKED_PROFIT_FOR_SELL))`. The `MIN_LOCKED_PROFIT_FOR_SELL` floor ensures worst-case execution locks in at least 2% profit vs entry — preventing the trailing stop from firing on tiny pullbacks that capture insufficient profit. For the floor to bind *above* break-even, MIN_LOCKED_PROFIT must exceed total fee (1.1%); 2% does that for all pairs. Combined with the v2.9.2 break-even guard and v3.3 buffer=0 activation, the trailing stop fires only on real pullbacks (≥2% from peak) and only locks in meaningful profit.
 
 ---
 
