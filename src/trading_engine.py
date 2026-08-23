@@ -1326,8 +1326,15 @@ class TradingEngine:
         Runs in the WebSocket background thread. Updates peak_price in-memory
         and triggers a sell immediately if the trailing stop is hit.
         Keeps DB writes rate-limited to avoid hammering on every tick.
+
+        v3.2: trailing-stop uses multi-source consensus for the *current* price
+        to stay consistent with monitor_positions() and avoid false triggers
+        from momentary single-exchange ticks (e.g. Coinbase raw price spikes
+        that get averaged out in consensus). Peak still tracks the raw tick
+        (a real high is a real high).
         """
         from config.settings import settings
+        from src.multi_source_pricer import get_multi_source_pricer
 
         with self._positions_lock:
             # Find matching open position
@@ -1348,6 +1355,7 @@ class TradingEngine:
                     continue
 
                 # --- Peak tracking (in-memory first, DB on change) ---
+                # Use RAW tick for peak — a real high water mark is a real high.
                 peak_price = position.get('peak_price', entry_price) or entry_price
                 if current_price > peak_price:
                     peak_price = current_price
@@ -1361,6 +1369,17 @@ class TradingEngine:
                         logger.debug(f"[WS PEAK] {product_id}: £{peak_price:.2f}")
 
                 # --- Trailing stop check (same logic as monitor_positions) ---
+                # Use multi-source consensus for the *trigger* price so we don't
+                # fire on a single-exchange tick that other exchanges don't confirm.
+                try:
+                    pricer = get_multi_source_pricer()
+                    consensus_result = pricer.get_consensus_price(product_id, use_cache=True)
+                    trigger_price = consensus_result.price
+                except Exception as e:
+                    # Fall back to the raw WebSocket price if consensus unavailable
+                    logger.debug(f"[WS TRAILING STOP] consensus unavailable for {product_id}: {e}, using raw tick")
+                    trigger_price = current_price
+
                 fees = db_manager.get_fee_rates()
                 if not fees:
                     fees = coinbase_api.get_fees()
@@ -1380,20 +1399,20 @@ class TradingEngine:
                 stop_floor = break_even * (1 - trailing_pct)
                 trailing_stop = max(trailing_stop, stop_floor)
 
-                if current_price <= trailing_stop and trailing_activated:
+                if trigger_price <= trailing_stop and trailing_activated:
                     # v2.9.2: Never sell below break-even - the peak may be stale
-                    if current_price < break_even:
+                    if trigger_price < break_even:
                         logger.info(
                             f"[WS TRAILING STOP] {product_id}: Below break-even (£{break_even:.2f}), "
-                            f"holding. stop=£{trailing_stop:.2f} current=£{current_price:.2f}"
+                            f"holding. stop=£{trailing_stop:.2f} trigger=£{trigger_price:.2f}"
                         )
                         return
 
                     # Execute the sell immediately
-                    pnl = (current_price - entry_price) * sell_size
+                    pnl = (trigger_price - entry_price) * sell_size
                     logger.warning(
                         f"[WS TRAILING STOP] TRIGGERED: {product_id} "
-                        f"current=£{current_price:.2f} <= stop=£{trailing_stop:.2f} "
+                        f"trigger=£{trigger_price:.2f} <= stop=£{trailing_stop:.2f} "
                         f"pnl=£{pnl:.2f} size={sell_size}"
                     )
 
@@ -1405,7 +1424,7 @@ class TradingEngine:
                             logger.error(f"[WS TRAILING STOP] Failed to execute sell: {e}")
                             return
 
-                    self._close_position(pos_id, pnl, "Trailing stop hit (real-time)", current_price)
+                    self._close_position(pos_id, pnl, "Trailing stop hit (real-time)", trigger_price)
 
                     # Clear holdings
                     if product_id in self.holdings:
@@ -1417,7 +1436,7 @@ class TradingEngine:
                 # Debug log every 60s at most (avoid spam on ticker)
                 logger.debug(
                     f"[WS TRAILING STOP] {product_id}: "
-                    f"peak=£{peak_price:.2f} curr=£{current_price:.2f} "
+                    f"peak=£{peak_price:.2f} trigger=£{trigger_price:.2f} "
                     f"stop=£{trailing_stop:.2f} activated={trailing_activated}"
                 )
 
