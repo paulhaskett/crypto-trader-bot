@@ -127,7 +127,12 @@ class Settings:
     MIN_PROFIT_STRONG_DOWNTREND: float = 0.02  # Strong downtrend: 2% (may recover)
     
     TRAILING_STOP_ENABLED: bool = True  # Enable trailing stop protection
-    TRAILING_STOP_PERCENT: float = 0.02  # 2% trailing stop (user request)
+    # v3.6: Lowered from 2% to 0.5% so ATR-based adaptation can dominate.
+    # The previous 2% floor made the max(fixed, ATR*2.5) formula effectively
+    # ignore ATR for all pairs (ADA atr_pct~0.23%, BTC atr_pct~0.04%, both
+    # 2.5*atr_pct < 2%). With 0.5% floor, ATR *2.5 drives the trailing stop
+    # naturally for all current pairs, giving wider stops on volatile pairs.
+    TRAILING_STOP_PERCENT: float = 0.005  # 0.5% minimum trailing (was 2%)
     # Activation at break-even (was 2% buffer). The v2.9.2 guard already prevents
     # ever selling below break-even, so the extra 2% buffer just delayed arming
     # the trailing stop — positions could sit "pending" for hours when only
@@ -145,9 +150,9 @@ class Settings:
     # Trailing stop only activates when price is above break-even (covering fees)
     # Uses trend regime from signal: 'uptrend', 'neutral', 'downtrend'
     TRAILING_STOP_REGIME_MAP: Dict[str, float] = {
-        'uptrend': 0.02,      # 2% trailing (user request)
-        'neutral': 0.02,      # 2% trailing (user request)
-        'downtrend': 0.02,    # 2% trailing (user request)
+        'uptrend': 0.005,    # 0.5% minimum (was 2%, lowered in v3.6)
+        'neutral': 0.005,    # 0.5% minimum (was 2%, lowered in v3.6)
+        'downtrend': 0.005,  # 0.5% minimum (was 2%, lowered in v3.6)
     }
     
     # Fee settings
