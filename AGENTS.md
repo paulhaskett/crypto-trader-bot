@@ -137,11 +137,11 @@
 | Maker Fee | 0.35% | Actual Coinbase fee, NOT fallback 0.6% |
 | Trailing Stop | 2% | Percentage below peak |
 | Trailing Activation Buffer | 0% | Arms the moment peak crosses break-even (v3.3, was 2%) |
-| Min Locked Profit for Sell | 2% | Worst-case execution must yield ≥2% profit vs entry (v3.4) |
+| Min Locked Profit for Sell | 0.5% | Worst-case execution must yield ≥0.5% profit vs entry (v3.5, was 2%) |
 | Model Confidence Threshold | 65% | Minimum confidence for signals |
 | Break-even | entry × 1.011 | entry + 1.1% (0.35% maker + 0.75% taker, DB fees) |
 
-> **Trailing-stop note (v3.4)**: The trailing stop now bottoms at `max(peak × 0.98, break_even × 0.98, entry × (1 + MIN_LOCKED_PROFIT_FOR_SELL))`. The `MIN_LOCKED_PROFIT_FOR_SELL` floor ensures worst-case execution locks in at least 2% profit vs entry — preventing the trailing stop from firing on tiny pullbacks that capture insufficient profit. For the floor to bind *above* break-even, MIN_LOCKED_PROFIT must exceed total fee (1.1%); 2% does that for all pairs. Combined with the v2.9.2 break-even guard and v3.3 buffer=0 activation, the trailing stop fires only on real pullbacks (≥2% from peak) and only locks in meaningful profit.
+> **Trailing-stop note (v3.5)**: The trailing stop now bottoms at `max(peak × 0.98, break_even × 0.98, entry × 1.005)`. The `MIN_LOCKED_PROFIT_FOR_SELL` floor was lowered from 2% to 0.5% on 2026-08-23 after the ETH-GBP sell fired at +£0.20 while price recovered to +1.5% within an hour. The 2% floor was too high — for positions where peak barely exceeds break-even, the floor sits above the natural trading range and triggers on normal pullbacks. At 0.5%, the floor is below break-even for all current pairs; the v2.9.2 break-even guard still enforces no-loss exits, and the trailing stop is free to fire on real pullbacks rather than waiting for peak to climb 4%+ above entry.
 
 ---
 
