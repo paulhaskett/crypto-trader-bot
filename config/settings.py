@@ -139,7 +139,7 @@ class Settings:
     # yields at least this much profit vs entry. Prevents selling on tiny
     # dip-then-recover patterns that lock in insufficient profit. User
     # direction 2026-08-23: require 1% locked-in before trailing stop fires.
-    MIN_LOCKED_PROFIT_FOR_SELL: float = 0.02  # 2% profit vs entry required (must exceed 1.1% total fee to bind above BE)
+    MIN_LOCKED_PROFIT_FOR_SELL: float = 0.005  # 0.5% profit vs entry required (v3.5: lowered from 2% so trailing stop fires earlier)
     
     # v2.4: Per-regime trailing stop (matches MIN_PROFIT thresholds)
     # Trailing stop only activates when price is above break-even (covering fees)
