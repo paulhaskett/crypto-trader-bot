@@ -100,9 +100,28 @@ def write_signal_cache(signals: Dict[str, Any]):
             'unanimous': signal.get('unanimous', False)
         }
 
+    # v3.7: Use atomic temp-write + rename to prevent corruption from
+    # concurrent writers (trading process + api_worker background refresh
+    # + /api/models/generate_signals). All three write to this file, and
+    # without locking, two simultaneous json.dump calls produce nested
+    # closing braces (corrupted JSON, dashboard shows "no signals 0% agree").
+    import tempfile
+    import os as _os
     try:
-        with open(SIGNAL_CACHE_FILE, 'w') as f:
+        # Write to temp file in same directory (atomic on same filesystem)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(SIGNAL_CACHE_FILE.parent),
+            prefix='.signal_cache_',
+            suffix='.tmp'
+        )
+        with _os.fdopen(tmp_fd, 'w') as f:
             json.dump(cache_data, f, default=str)
+            # mkstemp creates files with restrictive 0600 perms; restore
+            # original 0644 so api_worker (running as same uid but in case
+            # of permission escalation) can still read.
+            _os.fchmod(f.fileno(), 0o644)
+        # Atomic rename (overwrites destination on POSIX)
+        _os.replace(tmp_path, SIGNAL_CACHE_FILE)
         logger.info(f"Wrote signal cache: {len(cache_data)} products")
     except Exception as e:
         logger.error(f"Error writing signal cache: {e}")
