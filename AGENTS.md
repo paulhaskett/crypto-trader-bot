@@ -129,6 +129,12 @@
 
 15. **Dashboard `trailing_activated` must require current_price >= break_even** - The `/api/open_positions` endpoint sets `trailing_activated = peak_activated and current_price >= break_even`. Showing "Active" for any position whose peak merely crossed break-even (even when current is far underwater) was misleading — ADA-GBP was -7% underwater for 3 months yet displayed "Active". The trailing stop can only fire profitably when the position is actually in the profit zone. Don't revert this to peak-only; it caused confusion on the dashboard.
 
+16. **Container timezone is intentionally UTC — do NOT change to Europe/London on rebuild** - The bot logs timestamps in UTC because that's what Coinbase/Binance/Kraken APIs all use internally. The /tmp/trail_capture_watcher.py converts to BST for display. Changing the container TZ would:
+    - Create mixed UTC/BST timestamps in `/app/logs/trading.log` (existing log lines stay UTC, new ones would be BST)
+    - Break any analysis scripts that assume UTC
+    - Add DST transition confusion (spring/fall clock changes)
+    Note left in Dockerfile. If you want local time, do it at the display layer (dashboard frontend, watcher), not at the container level.
+
 ### Key Configuration
 
 | Setting | Value | Purpose |

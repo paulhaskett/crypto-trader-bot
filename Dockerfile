@@ -1,6 +1,14 @@
 # Use Python 3.13 slim image for Raspberry Pi (ARM64)
 FROM python:3.13-slim
 
+# NOTE on timezone: Container intentionally runs in UTC.
+# Bot logs use UTC timestamps (matches Coinbase, Binance, all exchange APIs).
+# The /tmp/trail_capture_watcher.py displays times in BST for the operator.
+# DO NOT change container to Europe/London — would create mixed UTC/BST in
+# /app/logs/trading.log during DST transitions, and break cross-platform
+# log analysis. If you want local-time display, convert at the display
+# layer (watcher, dashboard), not at the container level.
+
 # Set working directory
 WORKDIR /app
 
