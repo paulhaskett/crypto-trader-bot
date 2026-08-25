@@ -291,6 +291,20 @@ class OpenPosition(Base):
     scale_out_levels_triggered = Column(String(50), default="")  # Comma-separated levels triggered (e.g., "1,2")
     last_scale_out_price = Column(Float, default=0.0)  # Price of last scale-out
     last_scale_out_time = Column(DateTime, nullable=True)  # When last scale-out occurred
+
+    # v3.9: Underwater tracking for AI model feedback
+    # Records when a position goes below break-even (where v2.9.2 guard
+    # would block exits). The model gets feedback on how long predictions
+    # stay underwater and whether they eventually recover. This is data,
+    # not a hard rule — positions stay open under v2.9.2 mandate (never
+    # realize a loss). eventual_outcome is therefore either 'recovered'
+    # (price returned above break-even, AI SELL or trailing stop fired)
+    # or 'still_underwater' (position sitting indefinitely).
+    went_underwater_at = Column(DateTime, nullable=True)  # First time current < break_even
+    underwater_minutes_total = Column(Integer, default=0)  # Cumulative underwater time
+    underwater_max_drawdown = Column(Float, default=0.0)  # Worst drop % from entry
+    recovered_at = Column(DateTime, nullable=True)  # When price returned above break-even (if ever)
+    eventual_outcome = Column(String(20), default="")  # 'recovered' / 'still_underwater'
     remaining_size = Column(Float, default=0.0)  # Remaining position size after scale-outs
 
     def __repr__(self):
@@ -980,11 +994,11 @@ class DatabaseManager:
 
     def update_position_current_price(self, product_id: str, current_price: float) -> bool:
         """Update current_price for tracking price changes between API calls.
-        
+
         Args:
             product_id: The trading pair (e.g., 'BTC-GBP')
             current_price: The current market price
-            
+
         Returns:
             True if updated, False otherwise
         """
@@ -999,6 +1013,185 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to update position price: {e}")
             return False
+        finally:
+            session.close()
+
+    # v3.9: Underwater tracking — gives the model feedback on bad signals
+    def update_underwater_status(self, product_id: str) -> bool:
+        """Update underwater duration / drawdown / recovery status.
+
+        Called every cycle for each open position. Tracks:
+          - went_underwater_at: first time current_price < break_even (set once)
+          - underwater_minutes_total: cumulative minutes underwater (incremented each cycle)
+          - underwater_max_drawdown: worst drop from entry while underwater
+          - recovered_at: first time price returned above break-even (set once)
+          - eventual_outcome: 'recovered' / 'still_underwater' / 'closed_underwater'
+
+        This is data collection for AI model feedback. Positions stay open
+        per v2.9.2 break-even mandate — we never realize a loss.
+        """
+        session = self.get_session()
+        try:
+            pos = session.query(OpenPosition).filter(
+                OpenPosition.product_id == product_id,
+                OpenPosition.status == 'open'
+            ).first()
+            if not pos:
+                return False
+
+            entry = pos.entry_price or 0
+            current = pos.current_price or 0
+            if entry <= 0 or current <= 0:
+                return False
+
+            total_fee = 0.011  # 0.35% maker + 0.75% taker
+            break_even = entry * (1 + total_fee)
+            drawdown = (current - entry) / entry  # negative if underwater vs entry
+
+            now = datetime.now()
+            update = {}
+            if current < break_even:
+                # Position is underwater
+                if pos.went_underwater_at is None:
+                    # First time going underwater — record timestamp
+                    update['went_underwater_at'] = now
+                # Compute cumulative underwater minutes from went_underwater_at
+                # (set on first underwater, replaced each cycle to track total duration)
+                if pos.went_underwater_at is not None:
+                    elapsed = (now - pos.went_underwater_at).total_seconds() / 60
+                    update['underwater_minutes_total'] = int(elapsed)
+                # Track max drawdown (worst point seen)
+                if drawdown < (pos.underwater_max_drawdown or 0):
+                    update['underwater_max_drawdown'] = drawdown
+            else:
+                # Position is at or above break-even
+                if pos.went_underwater_at is not None and pos.recovered_at is None:
+                    # Just recovered — record the recovery event
+                    update['recovered_at'] = now
+                    update['eventual_outcome'] = 'recovered'
+
+            if update:
+                session.query(OpenPosition).filter(
+                    OpenPosition.product_id == product_id,
+                    OpenPosition.status == 'open'
+                ).update(update)
+                session.commit()
+                logger.debug(
+                    f"[UNDERWATER] {product_id}: drawdown={drawdown*100:+.2f}%, "
+                    f"total_uw_min={update.get('underwater_minutes_total', 'n/a')}, "
+                    f"outcome={update.get('eventual_outcome', 'tracking')}"
+                )
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to update underwater status for {product_id}: {e}")
+            return False
+        finally:
+            session.close()
+
+    def get_underwater_positions(self, hours: int = 168) -> List[Dict[str, Any]]:
+        """Get positions that went (or are) underwater, for AI feedback analysis.
+
+        Returns both currently open positions that are underwater, AND
+        recently-closed positions that were underwater at any point.
+
+        NOTE: Under v2.9.2 break-even mandate, positions don't close while
+        underwater. So eventual_outcome is one of:
+          - 'recovered' (close was profitable; price returned above break-even)
+          - '' (still open, not yet recovered)
+          - 'still_underwater' (if we ever resolve it without recovery)
+
+        Use case: build a dataset linking entry signals to underwater
+        duration, then later retrain models to predict "will this signal
+        go underwater?" before entering.
+        """
+        session = self.get_session()
+        try:
+            cutoff = datetime.now() - timedelta(hours=hours)
+            positions = session.query(OpenPosition).filter(
+                OpenPosition.opened_at >= cutoff,
+                OpenPosition.went_underwater_at.isnot(None)
+            ).order_by(OpenPosition.opened_at.desc()).all()
+
+            result = []
+            for p in positions:
+                result.append({
+                    'position_id': p.position_id,
+                    'product_id': p.product_id,
+                    'opened_at': p.opened_at.isoformat(),
+                    'closed_at': p.closed_at.isoformat() if p.closed_at else None,
+                    'status': p.status,
+                    'entry_price': p.entry_price,
+                    'signal_action': p.signal_action,
+                    'signal_confidence': p.signal_confidence,
+                    'entry_reason': p.entry_reason,
+                    'went_underwater_at': p.went_underwater_at.isoformat() if p.went_underwater_at else None,
+                    'underwater_minutes_total': p.underwater_minutes_total or 0,
+                    'underwater_max_drawdown': p.underwater_max_drawdown or 0.0,
+                    'recovered_at': p.recovered_at.isoformat() if p.recovered_at else None,
+                    'eventual_outcome': p.eventual_outcome or 'still_underwater',
+                    'final_pnl': p.pnl
+                })
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get underwater positions: {e}")
+            return []
+        finally:
+            session.close()
+
+    def get_signal_underwater_correlation(self, days: int = 30) -> Dict[str, Any]:
+        """Correlate AI signal confidence with underwater duration.
+
+        Returns:
+            {
+                'total_signals': N,
+                'signals_went_underwater': N,
+                'fp_rate': 0.42,
+                'avg_confidence_underwater': 0.71,
+                'avg_confidence_clean': 0.69,
+                'avg_underwater_minutes': 1234,
+                'avg_drawdown_when_underwater': -0.034,
+                'recovery_rate': 0.30
+            }
+        """
+        # get_underwater_positions returns list of dicts — use that directly
+        underwater_dicts = self.get_underwater_positions(days * 24)
+        session = self.get_session()
+        try:
+            cutoff = datetime.now() - timedelta(days=days)
+            all_recent = session.query(OpenPosition).filter(
+                OpenPosition.opened_at >= cutoff
+            ).all()
+            total = len(all_recent)
+            uw_set = {p['position_id'] for p in underwater_dicts}
+            uw_count = len(uw_set)
+
+            if total == 0:
+                return {'total_signals': 0, 'message': 'No recent signals'}
+
+            uw_positions = [p for p in all_recent if p.position_id in uw_set]
+            clean_positions = [p for p in all_recent if p.position_id not in uw_set]
+
+            uw_confs = [p.signal_confidence for p in uw_positions if p.signal_confidence]
+            clean_confs = [p.signal_confidence for p in clean_positions if p.signal_confidence]
+
+            uw_minutes = [p.underwater_minutes_total or 0 for p in uw_positions]
+            uw_drawdowns = [p.underwater_max_drawdown or 0 for p in uw_positions]
+            recoveries = sum(1 for p in uw_positions if p.eventual_outcome == 'recovered')
+
+            return {
+                'total_signals': total,
+                'signals_went_underwater': uw_count,
+                'fp_rate': uw_count / total if total > 0 else 0,
+                'avg_confidence_underwater': sum(uw_confs) / len(uw_confs) if uw_confs else 0,
+                'avg_confidence_clean': sum(clean_confs) / len(clean_confs) if clean_confs else 0,
+                'avg_underwater_minutes': sum(uw_minutes) / len(uw_minutes) if uw_minutes else 0,
+                'avg_drawdown_when_underwater': sum(uw_drawdowns) / len(uw_drawdowns) if uw_drawdowns else 0,
+                'recovery_rate': recoveries / uw_count if uw_count > 0 else 0
+            }
+        except Exception as e:
+            logger.error(f"Failed to compute correlation: {e}")
+            return {'error': str(e)}
         finally:
             session.close()
 

@@ -882,6 +882,14 @@ class TradingEngine:
                     stored_entry_price = position['entry_price']
                     position_size = position.get('remaining_size', position['size'])
 
+                    # v3.9: Track underwater status for AI feedback
+                    # Records duration/drawdown when position is below break-even.
+                    # Positions stay open under v2.9.2 mandate; this is observability.
+                    try:
+                        db_manager.update_underwater_status(product_id)
+                    except Exception as uw_err:
+                        logger.debug(f"Underwater update skipped for {product_id}: {uw_err}")
+
                     # Get TRUE cost basis from Coinbase fills (FIFO)
                     if not self.paper_trading:
                         cost_basis_size, fifo_entry_price = get_fifo_cost_basis(product_id)
