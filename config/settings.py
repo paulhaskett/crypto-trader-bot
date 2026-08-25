@@ -171,9 +171,9 @@ class Settings:
     SCALE_IN_LEVELS_BULL: list = [3.0]       # Uptrend: trigger at 3% drop
 
     # AI/ML Configuration
-    MODEL_CONFIDENCE_THRESHOLD: float = 0.65  # 65% - reduce signals
+    MODEL_CONFIDENCE_THRESHOLD: float = 0.75  # 75% (v3.8: raised from 65% to reduce false positives). User concern 2026-08-25: 65% threshold let too many weak signals through; positions went underwater and stayed there because v2.9.2 break-even guard blocked exits. 75% means fewer entries but higher quality. Wait for v3.8 accuracy data before tuning further.
     FEATURE_WINDOW_SIZE: int = 48  # Hours of data for features (48h - more context)
-    PREDICTION_HORIZON: int = 12  # Hours to predict ahead (12h aligns with patient trading)
+    PREDICTION_HORIZON: int = 6  # Hours to predict ahead (v3.8: lowered from 12h). User concern 2026-08-25: 12h horizon in volatile markets meant 12-hour predictions could be "right" while entry was at a local top. 6h horizon matches 30-min cycle cadence better (12 cycles per horizon vs 24) and gives more recent training signal. RETRAIN REQUIRED after this change.
     
     # v2.1: Dynamic Confidence Threshold
     USE_DYNAMIC_THRESHOLD: bool = True           # Enable volatility-based threshold

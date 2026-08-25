@@ -299,6 +299,31 @@ class TradingEngine:
                 signal = ai_model.get_signal(product_id)
                 signals_for_cache[product_id] = signal
 
+                # v3.8: Log prediction for later accuracy evaluation.
+                # Recorded every cycle so we can measure AI accuracy over time
+                # and identify false positives (signals that didn't pan out).
+                try:
+                    regime = signal.get('regime') or 'unknown'
+                    # Price isn't in the signal dict; fetch from market_data latest close
+                    price_now = None
+                    try:
+                        from src.database import db_manager as _dbm
+                        latest = _dbm.get_market_data(product_id)
+                        if latest and 'close' in latest[0]:
+                            price_now = float(latest[0]['close'])
+                    except Exception:
+                        pass
+                    db_manager.save_prediction_log(
+                        product_id=product_id,
+                        signal_action=signal.get('action', 'HOLD'),
+                        signal_confidence=float(signal.get('confidence', 0)),
+                        regime=regime,
+                        price_at_signal=price_now,
+                        horizon_hours=settings.PREDICTION_HORIZON
+                    )
+                except Exception as log_err:
+                    logger.debug(f"Prediction log skipped for {product_id}: {log_err}")
+
             write_signal_cache(signals_for_cache)
             logger.info(f"Synced {len(signals_for_cache)} signals to cache for dashboard")
         except Exception as e:

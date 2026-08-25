@@ -176,9 +176,56 @@ class PortfolioSnapshot(Base):
     __table_args__ = (
         Index('idx_portfolio_timestamp', 'timestamp'),
     )
-    
+
     def __repr__(self):
         return f"<PortfolioSnapshot(total_value={self.total_value}, timestamp={self.timestamp})>"
+
+
+class PredictionLog(Base):
+    """Track AI signal predictions and their actual outcomes.
+
+    v3.8: Built because we needed to know if the AI is actually right —
+    the v2.9.2 break-even guard means we never realize losses, so the model
+    has no feedback loop when its BUY predictions go underwater. This table
+    records every signal with action/confidence/timestamp, then a separate
+    cron/cycle job fills in `actual_direction` and `outcome` once the
+    horizon (PREDICTION_HORIZON hours) elapses.
+
+    Use cases:
+      - Per-pair accuracy profile (is BTC better predicted than ADA?)
+      - Confidence calibration (do 70% confidence predictions actually win 70%?)
+      - Regime breakdown (does uptrend prediction work better than downtrend?)
+      - Future: dynamic confidence threshold based on rolling accuracy
+    """
+    __tablename__ = 'prediction_logs'
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.now, index=True)
+    product_id = Column(String(20), nullable=False, index=True)
+
+    # Signal at time of prediction
+    signal_action = Column(String(10), nullable=False)  # BUY / SELL / HOLD
+    signal_confidence = Column(Float, nullable=False)
+    regime = Column(String(20))
+    price_at_signal = Column(Float)
+
+    # Outcome (filled in later by evaluator)
+    horizon_hours = Column(Integer, default=12)
+    evaluated = Column(Boolean, default=False, index=True)
+    evaluated_at = Column(DateTime, nullable=True)
+    price_at_horizon = Column(Float, nullable=True)
+    actual_direction = Column(Integer, nullable=True)  # 0=down, 1=flat, 2=up
+    outcome = Column(String(20), nullable=True)  # 'correct' / 'wrong' / 'neutral'
+    pnl_pct = Column(Float, nullable=True)  # price change over horizon
+
+    __table_args__ = (
+        Index('idx_pred_product_time', 'product_id', 'timestamp'),
+        Index('idx_pred_evaluated', 'evaluated'),
+    )
+
+    def __repr__(self):
+        return (f"<PredictionLog({self.product_id} {self.signal_action} "
+                f"@{self.signal_confidence:.2f} evaluated={self.evaluated})>")
 
 
 class UserSettings(Base):
@@ -883,9 +930,11 @@ class DatabaseManager:
                     existing.remaining_size = new_remaining
                 logger.info(f"Updated position for {product_id}: {position_data.get('side')} @ {position_data.get('entry_price')}")
             else:
-                # Create new position - generate position_id
+                # Create new position - use caller's position_id if provided so the
+                # in-memory/risk-manager id matches the DB row (id mismatch caused
+                # orphaned open positions when closes targeted the caller's uuid).
                 import uuid
-                position_id = str(uuid.uuid4())
+                position_id = position_data.get('position_id') or str(uuid.uuid4())
                 
                 # Filter to only include fields that exist in the model
                 model_fields = ['position_id', 'product_id', 'side', 'size', 'entry_price', 
@@ -1582,6 +1631,211 @@ class DatabaseManager:
             session.rollback()
             logger.error(f"Failed to save portfolio snapshot: {e}")
             return False
+        finally:
+            session.close()
+
+    # v3.8: Prediction accuracy tracking
+    def save_prediction_log(self, product_id: str, signal_action: str,
+                              signal_confidence: float, regime: str = None,
+                              price_at_signal: float = None,
+                              horizon_hours: int = 12) -> Optional[int]:
+        """Record an AI signal for later accuracy evaluation.
+
+        Called when a signal is generated. A separate evaluator fills in
+        actual_direction and outcome after PREDICTION_HORIZON hours elapse.
+        """
+        session = self.get_session()
+        try:
+            log = PredictionLog(
+                product_id=product_id,
+                signal_action=signal_action,
+                signal_confidence=signal_confidence,
+                regime=regime,
+                price_at_signal=price_at_signal,
+                horizon_hours=horizon_hours,
+                evaluated=False
+            )
+            session.add(log)
+            session.commit()
+            return log.id
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to save prediction log: {e}")
+            return None
+        finally:
+            session.close()
+
+    def get_pending_predictions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get predictions whose horizon has elapsed but haven't been evaluated yet.
+
+        Uses each prediction's own horizon_hours (was hardcoded 12, but in
+        v3.8 PREDICTION_HORIZON was lowered to 6h so different rows can
+        have different horizons).
+        """
+        session = self.get_session()
+        try:
+            # Use 6h as the floor — anything older than that is eligible
+            # (covers both pre-v3.8 12h predictions and new 6h predictions)
+            cutoff = datetime.now() - timedelta(hours=6)
+            pending = session.query(PredictionLog).filter(
+                PredictionLog.evaluated == False,
+                PredictionLog.timestamp <= cutoff
+            ).order_by(PredictionLog.timestamp.asc()).limit(limit).all()
+            return [
+                {
+                    'id': p.id,
+                    'product_id': p.product_id,
+                    'signal_action': p.signal_action,
+                    'signal_confidence': p.signal_confidence,
+                    'regime': p.regime,
+                    'price_at_signal': p.price_at_signal,
+                    'timestamp': p.timestamp.isoformat(),
+                    'horizon_hours': p.horizon_hours
+                }
+                for p in pending
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get pending predictions: {e}")
+            return []
+        finally:
+            session.close()
+
+    def evaluate_prediction(self, prediction_id: int, price_at_horizon: float) -> bool:
+        """Update a prediction with its actual outcome.
+
+        Compares signal_action vs actual price movement:
+          BUY:  correct if price_at_horizon > price_at_signal * 1.001 (any up move)
+          SELL: correct if price_at_horizon < price_at_signal * 0.999 (any down move)
+          HOLD: correct if price stayed within ±0.5%
+        """
+        session = self.get_session()
+        try:
+            log = session.query(PredictionLog).filter_by(id=prediction_id).first()
+            if not log:
+                logger.warning(f"Prediction {prediction_id} not found")
+                return False
+            if log.evaluated:
+                logger.debug(f"Prediction {prediction_id} already evaluated")
+                return True
+
+            entry = log.price_at_signal
+            if entry is None or entry <= 0:
+                logger.warning(f"Prediction {prediction_id} has no price_at_signal")
+                return False
+
+            pnl_pct = (price_at_horizon - entry) / entry
+
+            # Determine actual direction: 0=down, 1=flat, 2=up
+            if pnl_pct > 0.001:
+                actual_direction = 2
+            elif pnl_pct < -0.001:
+                actual_direction = 0
+            else:
+                actual_direction = 1
+
+            # Determine outcome vs predicted action
+            if log.signal_action == 'BUY':
+                outcome = 'correct' if pnl_pct > 0.001 else 'wrong'
+            elif log.signal_action == 'SELL':
+                outcome = 'correct' if pnl_pct < -0.001 else 'wrong'
+            else:  # HOLD
+                outcome = 'correct' if abs(pnl_pct) <= 0.005 else 'wrong'
+
+            log.price_at_horizon = price_at_horizon
+            log.actual_direction = actual_direction
+            log.outcome = outcome
+            log.pnl_pct = pnl_pct
+            log.evaluated = True
+            log.evaluated_at = datetime.now()
+            session.commit()
+            logger.info(
+                f"[PRED_EVAL] {log.product_id} {log.signal_action} "
+                f"@{log.signal_confidence:.2f} -> {outcome} "
+                f"(pnl={pnl_pct*100:+.2f}%)"
+            )
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to evaluate prediction {prediction_id}: {e}")
+            return False
+        finally:
+            session.close()
+
+    def get_prediction_accuracy(self, product_id: str = None,
+                                 days: int = 7) -> Dict[str, Any]:
+        """Get prediction accuracy stats.
+
+        Returns:
+            {
+                'product_id': ...,
+                'days': ...,
+                'total_predictions': N,
+                'evaluated': N,
+                'by_action': {'BUY': {'correct': N, 'wrong': N, 'accuracy': 0.65}, ...},
+                'overall_accuracy': 0.62,
+                'avg_confidence': 0.71,
+                'calibration_gap': 0.09,  # how much confidence overestimates accuracy
+            }
+        """
+        session = self.get_session()
+        try:
+            cutoff = datetime.now() - timedelta(days=days)
+            q = session.query(PredictionLog).filter(
+                PredictionLog.timestamp >= cutoff,
+                PredictionLog.evaluated == True
+            )
+            if product_id:
+                q = q.filter(PredictionLog.product_id == product_id)
+            logs = q.all()
+
+            if not logs:
+                return {
+                    'product_id': product_id,
+                    'days': days,
+                    'total_predictions': 0,
+                    'evaluated': 0,
+                    'message': 'No evaluated predictions yet'
+                }
+
+            by_action = {}
+            total_correct = 0
+            total_evaluated = 0
+            total_conf = 0.0
+            for log in logs:
+                action = log.signal_action
+                if action not in by_action:
+                    by_action[action] = {'correct': 0, 'wrong': 0, 'accuracy': 0.0, 'count': 0}
+                by_action[action]['count'] += 1
+                if log.outcome == 'correct':
+                    by_action[action]['correct'] += 1
+                    total_correct += 1
+                else:
+                    by_action[action]['wrong'] += 1
+                total_evaluated += 1
+                total_conf += log.signal_confidence
+
+            # Compute per-action accuracy
+            for action, stats in by_action.items():
+                total = stats['correct'] + stats['wrong']
+                stats['accuracy'] = stats['correct'] / total if total > 0 else 0
+
+            overall_accuracy = total_correct / total_evaluated if total_evaluated > 0 else 0
+            avg_confidence = total_conf / total_evaluated if total_evaluated > 0 else 0
+            calibration_gap = avg_confidence - overall_accuracy  # positive = overconfident
+
+            return {
+                'product_id': product_id or 'ALL',
+                'days': days,
+                'total_predictions': len(logs),
+                'evaluated': total_evaluated,
+                'overall_accuracy': overall_accuracy,
+                'avg_confidence': avg_confidence,
+                'calibration_gap': calibration_gap,
+                'by_action': by_action
+            }
+        except Exception as e:
+            logger.error(f"Failed to get prediction accuracy: {e}")
+            return {'error': str(e)}
         finally:
             session.close()
 
