@@ -6,6 +6,29 @@
 
 ### Common Bugs to Avoid
 
+0. **Phantom sells + duplicate buys from SDK order_id extraction, fill verification, OPEN status handling [FIXED 2026-08-27]** — Three compounding bugs in `coinbase_api.py:place_market_order()`:
+   ```python
+   # WRONG: order_id is not a top-level attr on CreateOrderResponse
+   order_id = getattr(order, 'order_id', f"sdk_order_{int(time.time())}")  # Always falls to fake ID!
+
+   # CORRECT: Extract from success_response (dict-or-object safe), then verify fill
+   sr = order.success_response
+   if isinstance(sr, dict):
+       order_id = sr.get('order_id')
+   else:
+       order_id = getattr(sr, 'order_id', None)
+   # ... fetch order details ...
+   if order_status == 'CANCELLED':
+       return {'success': False, 'error': 'Order cancelled', ...}
+   # OPEN = just placed, wait 2s and re-check. NEVER retry on OPEN — creates duplicate orders.
+   if order_status == 'OPEN' and filled_size == 0.0:
+       time.sleep(2)
+       # re-fetch...
+   ```
+   Also: `trading_engine.py` must check `order_result.get('success')` BEFORE calling `_close_position()`. Both cycle-based and WebSocket trailing stop paths were fixed. `error_response` also needs dict/object handling.
+
+   **v3.11 confidence threshold**: `MODEL_CONFIDENCE_THRESHOLD` raised 0.75→0.80 on 2026-08-27. Data analysis: ALL underwater positions had confidence <80% (68-79%). All 80%+ positions stayed clean. 85% kills all trading (zero historical BUYs). 80% is the sweet spot.
+
 1. **`trailing_activated` undefined** - In `trading_engine.py:monitor_positions()`, the variable `trailing_activated` must be defined before use:
    ```python
    # Pre-v3.3 (buffer=2%): trailing_activated = peak_price >= break_even * 1.02
@@ -135,6 +158,10 @@
     - Add DST transition confusion (spring/fall clock changes)
     Note left in Dockerfile. If you want local time, do it at the display layer (dashboard frontend, watcher), not at the container level.
 
+17. **Coinbase candles: params built but never sent [FIXED 2026-08-31, v3.12]** - `coinbase_api.py:get_candles()` constructed `params` (granularity/start/end) but called `_make_request()` without them. Coinbase silently returned its default 300 most-recent **1-minute** candles; the requested 1h granularity and date range were ignored. Every "180 days of training data" request actually got ~5 hours of 1-min bars. Fix: `params` passed through (`_make_request` gained a `params` kwarg; only safe for unauthenticated `products/*` endpoints — never pass params on HMAC-signed endpoints) plus pagination in ≤300-candle chunks with boundary dedupe.
+18. **Mixed-granularity training grid [FIXED 2026-08-31, v3.12]** - `collect_multi_source_data()` merged Coinbase 1-minute candles with CoinGecko/Kraken/Binance 1-hour candles on one timeline. Labels (`close.shift(-PREDICTION_HORIZON)` = 6) meant "6 minutes later" on minute rows and "6 hours later" on hour rows; `rolling(20)` windows spanned 20 minutes or 20 hours depending on the row. Fix: `_resample_1h()` normalizes every source to a uniform 1h grid before the merge. Also `_get_cached_data()` no longer serves requests >7 days (it silently truncated to 500 1-min rows before), `db_manager.get_market_data()` gained a `limit` param, cache reads are resampled to 1h, and a sparse-coverage guard falls through to a live fetch.
+19. **Confidence inflation chain [FIXED 2026-08-31, v3.12]** - The ensemble applied multiplicative boosts *before* the 80% gate: agreement ×1.15 (unanimous), regime ×1.20 (uptrend BUY / downtrend SELL, capped 0.95), volatility ×1.15 (low-vol). A raw 0.70 BUY in an uptrend gated as 0.81+ — e.g. the "conf=85%" LTC entry that went underwater 17h later was raw ~0.71. Fix: `_get_action()` gates on RAW confidence; `_apply_regime_adjustments()` keeps only protective downgrades (downtrend BUY ×0.65, uptrend SELL ×0.65, high-vol ×0.75); `raw_confidence` is recorded on the signal result. Additionally RF/GB now get isotonic probability calibration (`CalibratedClassifierCV` + `FrozenEstimator`, chronological last-20% calib split; sklearn 1.9 removed `cv='prefit'` — use FrozenEstimator + default cv) so a logged 80% means empirical 80%. **Expect far fewer BUYs after this fix — that is correct behavior**, not dormancy: the pre-v3.12 BUYs were fired on inflated numbers. Re-evaluate after ~2 weeks of prediction_logs accumulate before tuning the threshold again.
+
 ### Key Configuration
 
 | Setting | Value | Purpose |
@@ -144,7 +171,7 @@
 | Trailing Stop | 0.5% min + ATR*2.5 + 5% cap | Adaptive per pair via volatility (v3.6) |
 | Trailing Activation Buffer | 0% | Arms the moment peak crosses break-even (v3.3, was 2%) |
 | Min Locked Profit for Sell | 0.5% | Worst-case execution must yield ≥0.5% profit vs entry (v3.5, was 2%) |
-| Model Confidence Threshold | 65% | Minimum confidence for signals |
+| Model Confidence Threshold | 80% | v3.11 raised 75→80; v3.12 gates on RAW confidence (pre-boost), so effective bar is now much higher |
 | Break-even | entry × 1.011 | entry + 1.1% (0.35% maker + 0.75% taker, DB fees) |
 
 > **Trailing-stop note (v3.5)**: The trailing stop now bottoms at `max(peak × 0.98, break_even × 0.98, entry × 1.005)`. The `MIN_LOCKED_PROFIT_FOR_SELL` floor was lowered from 2% to 0.5% on 2026-08-23 after the ETH-GBP sell fired at +£0.20 while price recovered to +1.5% within an hour. The 2% floor was too high — for positions where peak barely exceeds break-even, the floor sits above the natural trading range and triggers on normal pullbacks. At 0.5%, the floor is below break-even for all current pairs; the v2.9.2 break-even guard still enforces no-loss exits, and the trailing stop is free to fire on real pullbacks rather than waiting for peak to climb 4%+ above entry.

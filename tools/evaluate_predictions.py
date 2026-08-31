@@ -10,8 +10,19 @@ not yet evaluated:
 """
 import sys
 import sqlite3
+import logging
 from datetime import datetime, timezone
 sys.path.insert(0, '/app')
+
+# Match the bot's logging setup so [PRED_EVAL] lines reach /app/logs/trading.log
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/app/logs/trading.log'),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
 
 DB = '/app/data/trades.db'
 
@@ -45,13 +56,13 @@ def main():
             return r['current_price']
         # Fallback: latest market_data close
         r = c.execute(
-            "SELECT close FROM market_data WHERE product_id=? ORDER BY timestamp DESC LIMIT 1",
+            "SELECT close_price FROM market_data WHERE product_id=? ORDER BY timestamp DESC LIMIT 1",
             (product_id,)
         ).fetchone()
         if r:
-            price_cache[product_id] = r['close']
+            price_cache[product_id] = r['close_price']
             c.close()
-            return r['close']
+            return r['close_price']
         c.close()
         return None
 

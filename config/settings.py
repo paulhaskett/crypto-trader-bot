@@ -171,7 +171,7 @@ class Settings:
     SCALE_IN_LEVELS_BULL: list = [3.0]       # Uptrend: trigger at 3% drop
 
     # AI/ML Configuration
-    MODEL_CONFIDENCE_THRESHOLD: float = 0.75  # 75% (v3.8: raised from 65% to reduce false positives). User concern 2026-08-25: 65% threshold let too many weak signals through; positions went underwater and stayed there because v2.9.2 break-even guard blocked exits. 75% means fewer entries but higher quality. Wait for v3.8 accuracy data before tuning further.
+    MODEL_CONFIDENCE_THRESHOLD: float = 0.80  # 80% (v3.11: raised from 75% to 80% on 2026-08-27). Data analysis showed ALL positions that went underwater had confidence <80% (68-79%). Every position at 80%+ (ETH 80%, LTC 83%, LINK 83%) stayed clean. 85% would kill all trading (zero historical BUYs at that level). 80% is the sweet spot.
     FEATURE_WINDOW_SIZE: int = 48  # Hours of data for features (48h - more context)
         # v3.8: Lowered horizon from 12h to 6h (2026-08-25, user concern about
     # AI predicting wrong in volatile markets). Models trained on 12h
