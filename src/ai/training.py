@@ -19,6 +19,8 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.feature_selection import SelectFromModel
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
 
 from config.settings import settings
 from .base import logger, CLASS_BUY, CLASS_HOLD, CLASS_SELL
@@ -145,6 +147,47 @@ class ModelTrainer:
         
         return atr if not pd.isna(atr) else 0.0
     
+    def _calibrate(self, model, X_train_scaled: np.ndarray, y_train: np.ndarray,
+                   product_id: str, model_type: str):
+        """v3.12: Calibrate predicted probabilities on a chronological tail
+        split of the training data, without refitting the base model.
+
+        Raw RF/GB predict_proba values are systematically overconfident
+        (frequent near-1.0 leaf probabilities). The ensemble gates BUY/SELL
+        at MODEL_CONFIDENCE_THRESHOLD (0.80), so uncalibrated probas let
+        inflated confidences through the gate. Isotonic calibration on the
+        last 20% (most recent) training rows — frozen base estimator, no
+        shuffle, no leakage of test data — maps them to empirical frequencies
+        so an 80% confidence means ~80% of such predictions were right.
+
+        Falls back to the uncalibrated model on any failure (calibration is
+        an improvement, not a hard requirement).
+        """
+        try:
+            n = len(X_train_scaled)
+            if n < 200:
+                logger.info(f"Skipping calibration for {product_id}/{model_type}: only {n} rows")
+                return model
+
+            calib_split = int(n * 0.8)
+            X_fit, X_cal = X_train_scaled[:calib_split], X_train_scaled[calib_split:]
+            y_fit, y_cal = y_train[:calib_split], y_train[calib_split:]
+
+            # All 3 classes must be present in the calibration set
+            if len(np.unique(y_cal)) < 3:
+                logger.info(f"Skipping calibration for {product_id}/{model_type}: <3 classes in calib split")
+                return model
+
+            calibrated = CalibratedClassifierCV(
+                FrozenEstimator(model), method='isotonic', cv='prefit'
+            )
+            calibrated.fit(X_cal, y_cal)
+            logger.info(f"Calibrated {model_type} for {product_id} on {len(X_cal)} held-out rows")
+            return calibrated
+        except Exception as e:
+            logger.warning(f"Calibration failed for {product_id}/{model_type} ({e}) — using uncalibrated model")
+            return model
+
     def train(self, product_id: str, force_retrain: bool = False) -> Dict[str, Any]:
         """
         Train all model types for a product.
@@ -382,7 +425,10 @@ class ModelTrainer:
                 logger.info(f"RF CV F1 for {product_id}: {np.mean(cv_scores):.3f} (+/- {np.std(cv_scores):.3f})")
             except Exception:
                 pass
-            
+
+            # v3.12: calibrate probabilities (isotonic, chronological tail split)
+            model = self._calibrate(model, X_train_scaled, y_train, product_id, 'rf')
+
             y_pred = model.predict(X_test_scaled)
             metrics = trading_evaluator.evaluate_trading_performance(y_test, y_pred, prices_test)
             
@@ -423,10 +469,13 @@ class ModelTrainer:
                 n_iter_no_change=10       # NEW - stop if no improvement for 10 iterations
             )
             model.fit(X_train_scaled, y_train)
-            
+
+            # v3.12: calibrate probabilities (isotonic, chronological tail split)
+            model = self._calibrate(model, X_train_scaled, y_train, product_id, 'gb')
+
             y_pred = model.predict(X_test_scaled)
             metrics = trading_evaluator.evaluate_trading_performance(y_test, y_pred, prices_test)
-            
+
             logger.info(f"GB (Hist) trained for {product_id}: win_rate={metrics.get('win_rate', 0):.1%}, "
                        f"profit_factor={metrics.get('profit_factor', 0):.2f}")
             
