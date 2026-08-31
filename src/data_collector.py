@@ -279,13 +279,32 @@ class DataCollector:
         from src.price_mapper import price_mapper
         
         try:
+            # v3.12: Normalize every source to a uniform 1-hour grid before merging.
+            # Previously Coinbase served 1-minute candles while CoinGecko/Kraken/Binance
+            # served 1-hour candles, and they were interleaved on one timeline —
+            # labels (close.shift(-6)) then meant "6 minutes later" on some rows and
+            # "6 hours later" on others, and rolling indicator windows spanned
+            # different durations row-to-row. Resampling each source to 1h first
+            # makes the grid uniform and the labels/features consistent.
             all_dataframes = []
-            
+            def _resample_1h(df: pd.DataFrame) -> pd.DataFrame:
+                """Resample OHLCV to uniform 1h bars; idempotent for 1h data."""
+                if df is None or df.empty:
+                    return df
+                df = df.sort_index()
+                rule = pd.to_datetime(df.index).to_series().diff().median()
+                # Already on a ~1h grid — just dedupe
+                if rule is not None and abs((rule.total_seconds()) - 3600) < 60:
+                    return df[~df.index.duplicated(keep='first')]
+                return df.resample('1h').agg(
+                    {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+                ).dropna(subset=['close'])
+
             # 1. Get Coinbase data (primary source)
             coinbase_df = self.collect_historical_data(product_id, days)
             if not coinbase_df.empty:
-                all_dataframes.append(('coinbase', coinbase_df))
-                logger.info(f"Coinbase: {len(coinbase_df)} rows for {product_id}")
+                all_dataframes.append(('coinbase', _resample_1h(coinbase_df)))
+                logger.info(f"Coinbase: {len(all_dataframes[-1][1])} rows (1h grid) for {product_id}")
             
             # 2. Get CoinGecko data (supplementary)
             # Map product_id like 'UNI-GBP' to CoinGecko coin ID
@@ -317,8 +336,11 @@ class DataCollector:
                     kraken_df = kraken_df[kraken_df['timestamp'] >= start_date]
                     if not kraken_df.empty:
                         kraken_df = kraken_df.set_index('timestamp').sort_index()
-                        all_dataframes.append(('kraken', kraken_df))
-                        logger.info(f"Kraken: {len(kraken_df)} rows for {product_id}")
+                        # v3.12: normalize to the uniform 1h grid
+                        kraken_df = _resample_1h(kraken_df)
+                        if not kraken_df.empty:
+                            all_dataframes.append(('kraken', kraken_df))
+                            logger.info(f"Kraken: {len(kraken_df)} rows (1h grid) for {product_id}")
             
             # 4. Get Binance klines (additional source)
             binance_symbol = price_mapper.get_binance_symbol(product_id)
@@ -344,8 +366,11 @@ class DataCollector:
                     binance_df = binance_df[binance_df.index >= start_date]
                     
                     if not binance_df.empty:
-                        all_dataframes.append(('binance', binance_df))
-                        logger.info(f"Binance: {len(binance_df)} rows for {product_id}")
+                        # v3.12: normalize to the uniform 1h grid
+                        binance_df = _resample_1h(binance_df)
+                        if not binance_df.empty:
+                            all_dataframes.append(('binance', binance_df))
+                            logger.info(f"Binance: {len(binance_df)} rows (1h grid) for {product_id}")
             
             # Merge all dataframes
             if not all_dataframes:
@@ -392,6 +417,16 @@ class DataCollector:
             DataFrame if cache is valid and recent, None otherwise
         """
         try:
+            # v3.12: DB cache only serves requests it can actually cover.
+            # The old code read at most 7 days / 500 rows regardless of the
+            # requested range, so a days=180 training request silently
+            # returned ~8 hours of 1-minute candles. Now requests longer than
+            # the DB cache window (7 days) bypass the cache entirely and go
+            # to the live API, and cache reads are resampled to the uniform
+            # 1h grid like every other data path.
+            if days > 7:
+                return None
+
             # First check in-memory cache
             if product_id in self.last_update:
                 cache_age = (datetime.now() - self.last_update[product_id]).total_seconds() / 60
@@ -404,12 +439,16 @@ class DataCollector:
                 else:
                     logger.info(f"In-memory cache too old ({cache_age:.0f} min), will refresh")
 
-            # Check database for freshness - limit to only 7 days max to avoid slow queries
+            # Check database for freshness
             end_date = datetime.now()
-            max_days = min(days, 7)
-            start_date = end_date - timedelta(days=max_days)
+            start_date = end_date - timedelta(days=days)
 
-            data_records = db_manager.get_market_data(product_id, start_date, end_date)
+            # v3.12: the DB stores minute + hour candles mixed; request enough
+            # rows to cover the window at the finest stored granularity, and
+            # resample to the uniform 1h grid below.
+            data_records = db_manager.get_market_data(
+                product_id, start_date, end_date, limit=days * 24 * 60 * 2
+            )
 
             if data_records:
                 # Check how recent the data is
@@ -445,14 +484,36 @@ class DataCollector:
                 df = pd.DataFrame(df_data)
                 df.set_index('timestamp', inplace=True)
                 df.sort_index(inplace=True)
-                
+
+                # v3.12: normalize to the uniform 1h grid (the DB stores a mix
+                # of 1-minute and 1-hour candles from different write paths).
+                # open=first/high=max/low=min/close=last is the correct OHLCV
+                # aggregation for downsampling.
+                df = df.resample('1h').agg(
+                    {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+                ).dropna(subset=['close'])
+
+                if df.empty:
+                    return None
+
+                # Coverage guard: if the cache doesn't actually cover the
+                # requested window (sparse old data), fall through to a live
+                # fetch instead of returning a misleadingly thin frame.
+                expected_rows = days * 24
+                if len(df) < expected_rows * 0.25:
+                    logger.info(
+                        f"DB cache too sparse for {product_id}: {len(df)} 1h rows "
+                        f"vs ~{expected_rows} expected — fetching fresh"
+                    )
+                    return None
+
                 # Cache it - but only keep last 7 days to avoid memory bloat
                 cache_days = 7
                 cache_start = datetime.now() - timedelta(days=cache_days)
                 df_cached = df[df.index >= cache_start]
                 self.market_data_cache[product_id] = df_cached
                 self.last_update[product_id] = datetime.now()
-                
+
                 # Filter to requested time range
                 requested_start = datetime.now() - timedelta(days=days)
                 df_filtered = df[df.index >= requested_start]

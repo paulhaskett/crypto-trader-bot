@@ -740,8 +740,12 @@ class DatabaseManager:
             session.close()
 
     def get_market_data(self, product_id: str, start_date: datetime = None,
-                        end_date: datetime = None) -> List[Dict[str, Any]]:
-        """Retrieve historical market data from the database."""
+                        end_date: datetime = None, limit: int = 500) -> List[Dict[str, Any]]:
+        """Retrieve historical market data from the database.
+
+        v3.12: limit is now a parameter — the hardcoded 500-row cap silently
+        truncated long ranges. Default stays 500 for existing callers.
+        """
         session = self.get_session()
         try:
             query = session.query(MarketData).filter(
@@ -752,8 +756,8 @@ class DatabaseManager:
             if end_date:
                 query = query.filter(MarketData.timestamp <= end_date)
             
-            # Limit to avoid slow queries - just get last 500 records
-            query = query.limit(500)
+            # Limit to avoid slow queries — caller-controlled since v3.12
+            query = query.limit(limit)
             
             records = query.all()
             result = []

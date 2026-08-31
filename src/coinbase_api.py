@@ -115,7 +115,8 @@ class CoinbaseAPI:
         if self.api_key:
             logger.info("Coinbase API client initialized successfully")
     
-    def _make_request(self, method: str, endpoint: str, data: dict = None, auth: bool = True) -> Optional[dict]:
+    def _make_request(self, method: str, endpoint: str, data: dict = None, auth: bool = True,
+                      params: dict = None) -> Optional[dict]:
         """Make a request to the Coinbase API with retry logic.
 
         Args:
@@ -123,6 +124,9 @@ class CoinbaseAPI:
             endpoint: API endpoint
             data: Request data for POST/PUT
             auth: Whether to include authentication headers (default: True)
+            params: Query-string parameters (GET). Only safe for unauthenticated
+                endpoints (products/*) — the legacy HMAC signature does not
+                include query params, so never pass params on signed endpoints.
         """
         max_retries = 3
         base_delay = 1.0  # Start with 1 second delay
@@ -187,7 +191,7 @@ class CoinbaseAPI:
                 self._last_request_time = time.time()
 
                 # Make request
-                response = requests.request(method, url, headers=headers, json=data, 
+                response = requests.request(method, url, headers=headers, json=data, params=params,
                                        proxies=self.proxy_config if self.use_proxy else None, 
                                        timeout=settings.PROXY_TIMEOUT if self.use_proxy else 30)
 
@@ -543,53 +547,89 @@ class CoinbaseAPI:
     
     def get_candles(self, product_id: str, start: datetime = None,
                     end: datetime = None, granularity: str = "ONE_HOUR") -> pd.DataFrame:
-        """
-        Get historical candle data for a trading pair.
-        
+        """Get historical candle data for a trading pair.
+
+        v3.12 fixes:
+        - params (granularity/start/end) are now actually sent to the API
+          (previously built but never passed — Coinbase returned its default
+          300 most-recent 1-minute candles and the requested range was
+          silently ignored).
+        - Pagination: Coinbase caps candles at 300 per request, so ranges
+          longer than 300 candles are fetched in chunks.
+
         Args:
             product_id: Trading pair (e.g., 'BTC-USD')
             start: Start time for candles
             end: End time for candles
-            granularity: Candle granularity (ONE_HOUR, FOUR_HOUR, ONE_DAY)
-            
+            granularity: Candle granularity (ONE_MINUTE, FIVE_MINUTE, FIFTEEN_MINUTE, ONE_HOUR, SIX_HOUR, ONE_DAY)
+
         Returns:
             Pandas DataFrame with OHLCV data
         """
         try:
-            # Convert granularity to ISO format
+            # Convert granularity to seconds
             granularity_map = {
-                "ONE_MINUTE": "60",
-                "FIVE_MINUTE": "300",
-                "FIFTEEN_MINUTE": "900",
-                "ONE_HOUR": "3600",
-                "SIX_HOUR": "21600",
-                "ONE_DAY": "86400"
+                "ONE_MINUTE": 60,
+                "FIVE_MINUTE": 300,
+                "FIFTEEN_MINUTE": 900,
+                "ONE_HOUR": 3600,
+                "SIX_HOUR": 21600,
+                "ONE_DAY": 86400
             }
-            granularity_iso = granularity_map.get(granularity, "3600")
-            
-            # Build request parameters
-            params = {
-                'granularity': granularity_iso
-            }
-            
-            if start:
-                params['start'] = start.isoformat()
-            if end:
-                params['end'] = end.isoformat()
-            
-            response = self._make_request('GET', f'products/{product_id}/candles')
-            
-            if response and isinstance(response, list) and len(response) > 0:
-                candles_data = response
-                
+            granularity_seconds = granularity_map.get(granularity, 3600)
+
+            if end is None:
+                end = datetime.now()
+            if start is None:
+                start = end - timedelta(days=1)
+
+            # Coinbase returns at most 300 candles per request — paginate
+            # the requested range in <=300-candle chunks, oldest first.
+            max_candles_per_request = 300
+            chunk_seconds = max_candles_per_request * granularity_seconds
+
+            all_candles = []
+            chunk_start = start
+
+            while chunk_start <= end:
+                chunk_end = min(
+                    chunk_start + timedelta(seconds=chunk_seconds),
+                    end
+                )
+                params = {
+                    'granularity': str(granularity_seconds),
+                    'start': chunk_start.isoformat(),
+                    'end': chunk_end.isoformat()
+                }
+                response = self._make_request(
+                    'GET', f'products/{product_id}/candles', params=params
+                )
+
+                if isinstance(response, list) and len(response) > 0:
+                    all_candles.extend(response)
+                elif response is not None:
+                    logger.warning(
+                        f"Unexpected candles response for {product_id} "
+                        f"({chunk_start} -> {chunk_end}): {type(response)}"
+                    )
+
+                # Guard against zero-length chunks (identical start/end)
+                if chunk_end <= chunk_start:
+                    break
+                chunk_start = chunk_end
+
+            if all_candles:
+                candles_data = all_candles
+
                 # Convert to DataFrame
                 df = pd.DataFrame(candles_data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
                 df.set_index('timestamp', inplace=True)
-                
-                # Sort by timestamp
+
+                # Sort by timestamp, dedupe (chunks may overlap at boundaries)
                 df.sort_index(inplace=True)
-                
+                df = df[~df.index.duplicated(keep='first')]
+
                 return df
             else:
                 # Return empty DataFrame with correct columns
