@@ -89,3 +89,4 @@ temp/
 
 # Session files
 session-*.md
+.trash/
