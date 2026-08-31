@@ -211,35 +211,20 @@ class EnsemblePredictor:
     
     def _get_action(self, prediction: int, confidence: float, 
                    agreement: float = 0.0, n_models: int = 3) -> str:
-        """Convert prediction and confidence to action with agreement-based scoring."""
-        
-        # Phase 3: Enhanced confidence scoring based on model agreement
-        # unanimous (all 3+ agree) = high confidence boost
-        # 2/3 agree = medium confidence
-        # split (1 each) = low confidence (should HOLD)
-        
-        agreement_level = self._get_agreement_level(agreement, n_models)
-        
-        # Apply agreement-based confidence adjustment
-        if agreement_level == 'unanimous':
-            # All models agree - boost confidence significantly
-            adjusted_confidence = confidence * 1.15
-            logger.debug(f"Agreement: unanimous - boosted confidence to {adjusted_confidence:.1%}")
-        elif agreement_level == 'majority':
-            # 2/3 agree - use as-is
-            adjusted_confidence = confidence
-            logger.debug(f"Agreement: majority - using confidence {adjusted_confidence:.1%}")
-        else:
-            # Split/mixed - reduce confidence significantly
-            adjusted_confidence = confidence * 0.7
-            logger.debug(f"Agreement: split - reduced confidence to {adjusted_confidence:.1%}")
-        
-        # Store agreement level for reporting
-        result_key = f'_agreement_level'
-        
-        if prediction == CLASS_BUY and adjusted_confidence > self.confidence_threshold:
+        """Convert prediction and confidence to action.
+
+        v3.12: the action gate now uses the RAW ensemble confidence. Previously
+        the agreement multiplier (x1.15 unanimous) was applied BEFORE the
+        threshold check, so a raw 0.70 unanimous vote passed the 0.80 gate —
+        inflated confidences were then logged as the entry reason (e.g. the
+        "conf=85%" LTC entry that went underwater 17h later). Agreement and
+        regime multipliers are display/context only now; only protective
+        downgrades (in _apply_regime_adjustments) may still lower the gating
+        confidence.
+        """
+        if prediction == CLASS_BUY and confidence > self.confidence_threshold:
             return 'BUY'
-        elif prediction == CLASS_SELL and adjusted_confidence > self.confidence_threshold:
+        elif prediction == CLASS_SELL and confidence > self.confidence_threshold:
             return 'SELL'
         else:
             return 'HOLD'
@@ -262,54 +247,51 @@ class EnsemblePredictor:
     
     def _apply_regime_adjustments(self, result: Dict[str, Any], regime: str,
                                    volatility: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply regime-based confidence adjustments and model weighting."""
+        """Apply regime-based confidence adjustments and model weighting.
+
+        v3.12: only PROTECTIVE downgrades affect the action gate. The previous
+        boost branches (uptrend BUY x1.20, downtrend SELL x1.20, low-vol
+        x1.15, all capped at 0.95) inflated raw confidences above the 80%
+        threshold — e.g. raw 0.71 BUY in an uptrend became 0.85 and fired a
+        BUY the models never actually scored at 85%. Boosts are removed from
+        the gating path; raw_confidence is preserved on the result so the
+        dashboard/entry logs can show both numbers.
+        """
         action = result.get('action', 'HOLD')
         confidence = result.get('confidence', 0.5)
-        
-        # Phase 3: Enhanced regime-based confidence adjustments
-        
-        # 1. Uptrend: RF and GB are better (trend following)
-        if regime == 'uptrend' and action == 'BUY':
-            confidence = min(confidence * 1.20, 0.95)  # Increased boost from 1.15
-            logger.info(f"Phase3: Boosted BUY confidence in uptrend: {confidence:.1%}")
-        
-        # 2. Downtrend: Ridge is better (mean reversion), reduce BUY
-        elif regime == 'downtrend' and action == 'BUY':
-            confidence = confidence * 0.65  # Increased reduction from 0.7
-            logger.info(f"Phase3: Reduced BUY confidence in downtrend: {confidence:.1%}")
-        
-        # 3. Downtrend SELL: GB is good (momentum)
-        elif regime == 'downtrend' and action == 'SELL':
-            confidence = min(confidence * 1.20, 0.95)
-            logger.info(f"Phase3: Boosted SELL confidence in downtrend: {confidence:.1%}")
-        
-        # 4. Neutral: balanced weighting
-        elif regime == 'neutral':
-            logger.debug(f"Phase3: Neutral regime - using standard confidence")
-        
-        # 5. Volatility adjustments
+        raw_confidence = confidence
+
+        # Protective downgrades only — these can turn BUY/SELL into HOLD,
+        # never the reverse.
+        if regime == 'downtrend' and action == 'BUY':
+            confidence = confidence * 0.65
+            logger.info(f"v3.12: Downgraded BUY confidence in downtrend: {confidence:.1%} (raw {raw_confidence:.1%})")
+        elif regime == 'uptrend' and action == 'SELL':
+            confidence = confidence * 0.65
+            logger.info(f"v3.12: Downgraded SELL confidence in uptrend: {confidence:.1%} (raw {raw_confidence:.1%})")
+
         vol_regime = volatility.get('regime', 'normal')
         if vol_regime == 'high':
-            confidence = confidence * 0.75  # Increased reduction from 0.8
-            logger.info(f"Phase3: Reduced confidence in high volatility: {confidence:.1%}")
-        elif vol_regime == 'low':
-            confidence = min(confidence * 1.15, 0.95)
-            logger.info(f"Phase3: Boosted confidence in low volatility: {confidence:.1%}")
-        
+            confidence = confidence * 0.75
+            logger.info(f"v3.12: Reduced confidence in high volatility: {confidence:.1%} (raw {raw_confidence:.1%})")
+
         result['confidence'] = confidence
-        
-        # Add regime info for dashboard
-        result['regime_confidence'] = {
-            'regime': regime,
-            'volatility': vol_regime,
-            'base_confidence': result.get('confidence', 0.5)
-        }
-        
+        result['raw_confidence'] = raw_confidence
+
+        # Re-gate with the (possibly downgraded) confidence
         if confidence > self.confidence_threshold and action != 'HOLD':
             result['action'] = action
         else:
             result['action'] = 'HOLD'
-        
+
+        # Add regime info for dashboard
+        result['regime_confidence'] = {
+            'regime': regime,
+            'volatility': vol_regime,
+            'base_confidence': confidence,
+            'raw_confidence': raw_confidence
+        }
+
         return result
     
     def _default_result(self) -> Dict[str, Any]:
