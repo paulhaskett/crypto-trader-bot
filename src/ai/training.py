@@ -178,8 +178,12 @@ class ModelTrainer:
                 logger.info(f"Skipping calibration for {product_id}/{model_type}: <3 classes in calib split")
                 return model
 
+            # sklearn 1.9: cv='prefit' was removed; FrozenEstimator(model)
+            # makes the base model immutable, so the default cv only splits
+            # the CALIBRATION rows (X_cal) among the calibrators — the base
+            # model is never refit and test data is never touched.
             calibrated = CalibratedClassifierCV(
-                FrozenEstimator(model), method='isotonic', cv='prefit'
+                FrozenEstimator(model), method='isotonic'
             )
             calibrated.fit(X_cal, y_cal)
             logger.info(f"Calibrated {model_type} for {product_id} on {len(X_cal)} held-out rows")
