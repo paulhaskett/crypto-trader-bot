@@ -539,9 +539,28 @@
                     console.log('Retrain status loaded:', statusData);
                     
                     if (daysSince !== null && daysSince !== undefined && typeof daysSince === 'number') {
-                        const dayWord = daysSince === 1 ? 'day' : 'days';
+                        // v3.13.1: 0 days → "Today (HH:MM)" instead of "0 days ago".
+                        // Timestamps are container UTC — convert to local time at the
+                        // display layer per project convention (container stays UTC).
+                        let retrainLabel;
+                        if (daysSince === 0) {
+                            retrainLabel = 'Today';
+                        } else if (daysSince === 1) {
+                            retrainLabel = 'Yesterday';
+                        } else {
+                            retrainLabel = `${daysSince} days ago`;
+                        }
+                        if (daysSince === 0 && lastDate) {
+                            try {
+                                const dt = new Date(lastDate + (lastDate.endsWith('Z') ? '' : 'Z'));
+                                if (!isNaN(dt)) {
+                                    const hm = dt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                                    retrainLabel += ` (${hm})`;
+                                }
+                            } catch (e) { /* keep plain label */ }
+                        }
                         document.getElementById('daysSinceRetrain').textContent = 
-                            `Last retrain: ${daysSince} ${dayWord} ago`;
+                            `Last retrain: ${retrainLabel}`;
                         document.getElementById('retrainStatus').textContent = 
                             autoEnabled ? 'Auto: Enabled' : 'Auto: Disabled';
                         document.getElementById('retrainStatus').className = 
