@@ -175,10 +175,12 @@ class Settings:
     FEATURE_WINDOW_SIZE: int = 48  # Hours of data for features (48h - more context)
         # v3.8: Lowered horizon from 12h to 6h (2026-08-25, user concern about
     # AI predicting wrong in volatile markets). Models trained on 12h
-    # labels will be slightly mismatched until retrain. Retrain via
-    # POST /api/models/retrain when convenient (not blocking).
-    # 6h horizon matches 30-min cycle cadence (12 cycles per horizon).
-    PREDICTION_HORIZON: int = 6  # Hours to predict ahead
+    # v3.13 (2026-09-01): horizon raised 6h→24h to match exit economics.
+    # Trailing stop needs peak ≥ entry×1.011 (fees) and a sell guarantees
+    # entry×1.005 (MIN_LOCKED_PROFIT_FOR_SELL) — so a BUY is only useful if
+    # the predicted move can plausibly reach ~entry×1.016. A +1.7% move in
+    # 6h is rare (starves training of BUY examples); in 24h it is common.
+    PREDICTION_HORIZON: int = 24  # Hours to predict ahead
     
     # v2.1: Dynamic Confidence Threshold
     USE_DYNAMIC_THRESHOLD: bool = True           # Enable volatility-based threshold
@@ -190,8 +192,15 @@ class Settings:
     # v1.9.0: Dynamic Threshold (ATR-based)
     USE_ATR_THRESHOLD: bool = True           # Enable ATR threshold
     ATR_PERIOD: int = 24                    # 24 hours (1 day)
-    ATR_MULTIPLIER: float = 0.05            # k × ATR threshold (lowered for more signals in low volatility)
-    ATR_MIN_THRESHOLD: float = 0.0001        # Minimum 0.01% floor (lowered for more signals in low volatility)
+    # v3.13 (2026-09-01): exit-aligned labels. Old values (0.05 / 0.0001)
+    # labeled a BUY for a +0.03–0.05% rise in 6h — 30–50× smaller than the
+    # ~1.6% needed to clear fees + break-even + MIN_LOCKED_PROFIT. Positions
+    # entered on those signals almost never activate the trailing stop.
+    # New floor 1.7% = fees (~1.1%, true round-trip taker ~1.5%) + 0.5%
+    # locked profit. Multiplier 2.5 widens for volatile pairs (high ATR
+    # means wider trailing stops, so bigger targets are self-consistent).
+    ATR_MULTIPLIER: float = 2.5             # k × ATR threshold (exit-aligned)
+    ATR_MIN_THRESHOLD: float = 0.017        # Minimum 1.7% floor (fees + locked profit)
     USE_ASYMMETRIC_ATR: bool = False        # Future: different k for BUY/SELL
     
     # v2.0: Volatility Regime Filter (ATR-based)

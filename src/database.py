@@ -1866,18 +1866,25 @@ class DatabaseManager:
         """Get predictions whose horizon has elapsed but haven't been evaluated yet.
 
         Uses each prediction's own horizon_hours (was hardcoded 12, but in
-        v3.8 PREDICTION_HORIZON was lowered to 6h so different rows can
-        have different horizons).
+        v3.8 PREDICTION_HORIZON was lowered to 6h, and in v3.13 raised to
+        24h, so rows with different horizons coexist).
         """
         session = self.get_session()
         try:
-            # Use 6h as the floor — anything older than that is eligible
-            # (covers both pre-v3.8 12h predictions and new 6h predictions)
+            # v3.13: per-row horizon — evaluate each prediction only after
+            # its own horizon_hours have elapsed (oldest still supported is 6h).
             cutoff = datetime.now() - timedelta(hours=6)
             pending = session.query(PredictionLog).filter(
                 PredictionLog.evaluated == False,
                 PredictionLog.timestamp <= cutoff
             ).order_by(PredictionLog.timestamp.asc()).limit(limit).all()
+            # Filter in Python: 6h floor above is the DB-level pre-filter;
+            # the exact per-row check needs the row's own horizon.
+            now = datetime.now()
+            pending = [
+                p for p in pending
+                if (now - p.timestamp) >= timedelta(hours=(p.horizon_hours or 6))
+            ]
             return [
                 {
                     'id': p.id,
@@ -1930,11 +1937,25 @@ class DatabaseManager:
             else:
                 actual_direction = 1
 
-            # Determine outcome vs predicted action
+            # v3.13: grade against the exit hurdle, not a 0.1% tick.
+            # A BUY that rises +0.3% is "correct" for a tick predictor but
+            # USELESS to this bot — it can never clear fees (~1.1%) plus the
+            # 0.5% locked-profit floor, so it floats underwater. BUY counts
+            # as correct only if the move clears the fee hurdle; SELL only
+            # if the drop clears it (a SELL signal that saves you from a
+            # -0.2% dip isn't worth the round-trip fees either).
+            # EXIT_HURDLE = taker 0.75% × 2 legs + maker→taker buffer ≈ 1.7%,
+            # matching ATR_MIN_THRESHOLD in settings.
+            try:
+                from config.settings import settings as _settings
+                _hurdle = float(getattr(_settings, 'ATR_MIN_THRESHOLD', 0.017))
+            except Exception:
+                _hurdle = 0.017
+
             if log.signal_action == 'BUY':
-                outcome = 'correct' if pnl_pct > 0.001 else 'wrong'
+                outcome = 'correct' if pnl_pct > _hurdle else 'wrong'
             elif log.signal_action == 'SELL':
-                outcome = 'correct' if pnl_pct < -0.001 else 'wrong'
+                outcome = 'correct' if pnl_pct < -_hurdle else 'wrong'
             else:  # HOLD
                 outcome = 'correct' if abs(pnl_pct) <= 0.005 else 'wrong'
 

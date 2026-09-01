@@ -274,17 +274,21 @@ class ModelTrainer:
         if cache_key in self._atr_config_cache:
             return self._atr_config_cache[cache_key]
         
+        # v3.13: exit-aligned grid. The old grid (mult 0.01–0.15, min
+        # 0.005–0.03%) produced labels 30–50× smaller than the ~1.6% the
+        # trailing-stop machinery needs to fire profitably. New grid
+        # brackets the exit hurdle: mult 1.5–3.5 around ATR, floor 1.2–2.5%.
         atr_configs = [
-            {'mult': 0.01, 'min': 0.00005},
-            {'mult': 0.01, 'min': 0.0001},
-            {'mult': 0.02, 'min': 0.00005},
-            {'mult': 0.02, 'min': 0.0001},
-            {'mult': 0.03, 'min': 0.00005},
-            {'mult': 0.05, 'min': 0.0001},
-            {'mult': 0.05, 'min': 0.0002},
-            {'mult': 0.10, 'min': 0.0001},
-            {'mult': 0.10, 'min': 0.0003},
-            {'mult': 0.15, 'min': 0.0001},
+            {'mult': 1.5, 'min': 0.012},
+            {'mult': 1.5, 'min': 0.017},
+            {'mult': 2.0, 'min': 0.017},
+            {'mult': 2.5, 'min': 0.017},
+            {'mult': 2.5, 'min': 0.020},
+            {'mult': 3.0, 'min': 0.017},
+            {'mult': 3.0, 'min': 0.025},
+            {'mult': 3.5, 'min': 0.017},
+            {'mult': 2.0, 'min': 0.012},
+            {'mult': 1.5, 'min': 0.025},
         ]
         
         best_score = -1
@@ -292,8 +296,8 @@ class ModelTrainer:
         
         # Fallback configs to try if no valid config found (relaxed thresholds)
         fallback_configs = [
-            {'mult': 0.05, 'min': 0.0001},
-            {'mult': 0.10, 'min': 0.0001},
+            {'mult': 2.5, 'min': 0.017},
+            {'mult': 1.5, 'min': 0.012},
         ]
         
         for cfg in atr_configs:
