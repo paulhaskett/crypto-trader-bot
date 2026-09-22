@@ -28,6 +28,7 @@ from src.coinbase_api import coinbase_api
 from src.database import db_manager
 from src.cache_manager import write_signal_cache
 from src.feature_engineering import add_temporal_features, add_volume_price_divergence, calculate_atr
+from src.trailing_stop import calculate_trailing_stop
 from typing import Tuple
 
 logger = logging.getLogger(__name__)
@@ -944,42 +945,42 @@ class TradingEngine:
                     # Get regime for context
                     regime = position.get('regime', 'neutral')
 
-                    # =====================================================
-                    # DYNAMIC ATR-BASED TRAILING STOP (v3.0)
-                    # =====================================================
+                    # ATR/trailing inputs are calculated in one shared helper so
+                    # execution and the dashboard report the same stop economics.
                     hist_df = None
+                    current_atr = None
                     try:
                         hist_df = data_collector.collect_historical_data(product_id, days=7)
-                        if hist_df is not None and not hist_df.empty and 'high' in hist_df.columns and 'low' in hist_df.columns:
+                        if hist_df is not None and not hist_df.empty and {'high', 'low', 'close'}.issubset(hist_df.columns):
                             atr_series = calculate_atr(hist_df, period=settings.ATR_PERIOD)
-                            current_atr = float(atr_series.iloc[-1]) if len(atr_series) > 0 else 0.0
-
-                            # ATR as percentage of price
-                            atr_pct = current_atr / current_price if current_price > 0 else 0.0
-
-                            # Dynamic trailing stop: max(fixed 2%, 2.5x ATR, regime-specific)
-                            # Adapts to volatility - wider stops in high vol, tighter in low vol
-                            atr_based_stop = atr_pct * 2.5
-                            fixed_stop = settings.TRAILING_STOP_PERCENT
-                            regime_stop = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
-
-                            trailing_pct = max(fixed_stop, atr_based_stop, regime_stop)
-                            # Cap at 5% to prevent excessive giveback
-                            trailing_pct = min(trailing_pct, 0.05)
-
-                            logger.info(f"[ATR TRAILING] {product_id}: atr={current_atr:.4f} atr_pct={atr_pct:.4f} atr_stop={atr_based_stop:.4f} fixed={fixed_stop:.4f} final={trailing_pct:.4f}")
-                        else:
-                            trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
-                            current_atr = 0.0
-                            atr_pct = 0.0
+                            if len(atr_series) > 0:
+                                current_atr = float(atr_series.iloc[-1])
                     except Exception as e:
-                        logger.warning(f"[ATR TRAILING] {product_id}: Failed to calculate ATR, using fixed: {e}")
-                        trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
-                        current_atr = 0.0
-                        atr_pct = 0.0
+                        logger.warning(f"[ATR TRAILING] Failed to calculate ATR, using fixed: {e}")
 
-                    # Track peak unconditionally (always update if higher)
                     peak_price = position.get('peak_price', entry_price)
+                    stop_info = calculate_trailing_stop(
+                        current_price=current_price,
+                        entry_price=entry_price,
+                        peak_price=peak_price,
+                        regime=regime,
+                        atr=current_atr,
+                        fixed_stop=settings.TRAILING_STOP_PERCENT,
+                        regime_stops=settings.TRAILING_STOP_REGIME_MAP,
+                        atr_multiplier=2.5,
+                        max_stop=0.05,
+                        maker_fee=maker_fee,
+                        taker_fee=taker_fee,
+                        activation_buffer=settings.TRAILING_ACTIVATION_BUFFER,
+                        min_locked_profit=settings.MIN_LOCKED_PROFIT_FOR_SELL,
+                    )
+                    trailing_pct = stop_info['trailing_pct']
+                    atr_pct = stop_info['atr_pct'] or 0.0
+
+                    logger.info(
+                        f"[ATR TRAILING] {product_id}: atr={current_atr} "
+                        f"atr_pct={atr_pct:.4f} final={trailing_pct:.4f}"
+                    )
                     if current_price > peak_price:
                         peak_price = current_price
                         position['peak_price'] = peak_price

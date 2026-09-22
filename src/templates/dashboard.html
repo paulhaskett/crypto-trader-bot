@@ -106,6 +106,7 @@
                         <i class="fas fa-wallet card-icon text-primary mb-2"></i>
                         <h6 class="text-muted">Portfolio Value</h6>
                         <h3 class="text-primary" id="card-portfolio-value">Loading...</h3>
+                        <small class="text-muted" id="card-portfolio-breakdown"></small>
                     </div>
                 </div>
             </div>
@@ -442,6 +443,14 @@
             if (!d || d.status !== 'success') return;
 
             document.getElementById('card-portfolio-value').textContent = d.formatted_total_value || 'N/A';
+            const portfolioBreakdown = document.getElementById('card-portfolio-breakdown');
+            if (portfolioBreakdown) {
+                const otherFiat = Number(d.other_fiat_value || 0);
+                const crypto = Number(d.crypto_value || 0);
+                portfolioBreakdown.textContent = otherFiat || crypto
+                    ? `GBP £${Number(d.gbp_balance || 0).toFixed(2)} + other £${(otherFiat + crypto).toFixed(2)}`
+                    : 'GBP wallet only';
+            }
             
             const dp = document.getElementById('card-daily-pnl');
             const dpC = document.getElementById('card-daily-pnl-container');
@@ -572,7 +581,7 @@
             const d = await fetchJSON(API.positions);
             const tbody = document.getElementById('positions-tbody');
             const cnt = document.getElementById('positions-count');
-            if (!d || d.status !== 'success' || !d.positions?.length) { tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No open positions</td></tr>'; cnt.textContent = '0'; return; }
+            if (!d || d.status !== 'success' || !d.positions?.length) { tbody.innerHTML = '<tr><td colspan="13" class="text-center text-muted py-4">No open positions</td></tr>'; cnt.textContent = '0'; return; }
             cnt.textContent = d.count;
             tbody.innerHTML = d.positions.map(p => `
                 <!-- Main Position Row -->
@@ -595,8 +604,10 @@
                     <td>↳ ${p.product_id}</td>
                     <td colspan="4">BE: £${p.break_even?.toLocaleString()} | <strong>Stop: £${p.trailing_stop?.toLocaleString()}</strong></td>
                     <td>Peak: £${p.peak_price?.toLocaleString()}</td>
-                    <td>Floor: £${p.stop_floor?.toLocaleString()}</td>
-                    <td><span class="badge bg-${p.trailing_activated ? 'success' : 'secondary'}">${p.trailing_activated ? 'Active' : 'Pending'}</span></td>
+                    <td>ATR: ${p.atr_available ? '£' + p.atr?.toLocaleString() + ' (' + p.atr_pct?.toFixed(3) + '%)' : '-'}</td>
+                    <td>ATR stop: ${p.atr_based_stop_pct != null ? p.atr_based_stop_pct.toFixed(3) + '%' : '-'}</td>
+                    <td>Trail: ${p.trailing_pct?.toFixed(3)}% | Gap: ${p.stop_distance != null ? '£' + p.stop_distance.toFixed(2) + ' (' + p.stop_distance_pct.toFixed(2) + '%)' : '-'}</td>
+                    <td><span class="badge bg-${p.trailing_activated ? 'success' : 'secondary'}">${p.stop_note || (p.trailing_activated ? 'Active' : 'Pending')}</span></td>
                     <td><span class="badge bg-info">${p.regime || 'neutral'}</span></td>
                     <td colspan="2"></td>
                 </tr>`).join('');

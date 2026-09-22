@@ -27,6 +27,7 @@ STATIC_DIR = BASE_DIR / 'src' / 'static'
 TEMPLATES_DIR = BASE_DIR / 'src' / 'templates'
 
 from src.cache_manager import SIGNAL_CACHE_FILE, LAST_CYCLE_FILE
+from src.portfolio_utils import account_value_gbp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -376,6 +377,8 @@ async def get_portfolio_summary():
         # Calculate total value using cached prices
         total_value = 0.0
         gbp_balance = 0.0
+        crypto_value = 0.0
+        other_fiat_value = 0.0
         holdings = []
         
         for account in accounts:
@@ -390,12 +393,10 @@ async def get_portfolio_summary():
                 value = balance
                 gbp_balance = balance
             elif currency in ['USD', 'USDC', 'EUR']:
-                # Handle stablecoins and fiat
-                if currency == 'EUR':
-                    rate = cc.get_exchange_rate('EUR', 'GBP') or 0.85
-                    value = balance * rate
-                else:
-                    value = balance  # USD/USDC = 1:1
+                # Account values are converted to GBP before being included in
+                # total_value. USD/USDC must not be added as if they were GBP.
+                eur_gbp_rate = cc.get_exchange_rate('EUR', 'GBP') or 0.85
+                value = account_value_gbp(currency, balance, usd_gbp_rate, eur_gbp_rate)
             elif currency not in valid_currencies:
                 continue
             else:
@@ -406,6 +407,10 @@ async def get_portfolio_summary():
             
             if value > 0:
                 total_value += value
+                if currency in ['USD', 'USDC', 'EUR']:
+                    other_fiat_value += value
+                elif currency != 'GBP':
+                    crypto_value += value
                 holdings.append({
                     'currency': currency,
                     'balance': round(balance, 8),
@@ -559,6 +564,9 @@ async def get_portfolio_summary():
             "total_value": round(total_value, 2),
             "formatted_total_value": format_currency(total_value, display_currency),
             "gbp_balance": round(gbp_balance, 2),
+            "crypto_value": round(crypto_value, 2),
+            "other_fiat_value": round(other_fiat_value, 2),
+            "reconciliation_delta": round(total_value - gbp_balance - crypto_value - other_fiat_value, 6),
             "daily_pnl": round(positions_pnl, 2),
             "formatted_daily_pnl": ('+' if positions_pnl >= 0 else '') + format_currency(abs(positions_pnl), display_currency),
             "total_pnl": round(positions_pnl + closed_pnl, 2),
@@ -939,47 +947,43 @@ async def get_open_positions():
                 scale_in_levels = pos.get('scale_in_levels_triggered', '') or ''
                 scale_in_price = pos.get('last_scale_in_price', 0) or 0
                 
-                # Calculate trailing stop info
-                from config.settings import settings
-                
-                # Get fee rates
+                # Calculate trailing stop info using the same pure helper as the
+                # trading engine. Historical data is cached by data_collector.
+                from src.trailing_stop import calculate_trailing_stop
+                data_collector = load_data_collector()
+                atr_value = None
+                try:
+                    hist_df = data_collector.collect_historical_data(product_id, days=7)
+                    if hist_df is not None and not hist_df.empty and {'high', 'low', 'close'}.issubset(hist_df.columns):
+                        from src.feature_engineering import calculate_atr
+                        atr_series = calculate_atr(hist_df, period=settings.ATR_PERIOD)
+                        if len(atr_series) > 0:
+                            atr_value = float(atr_series.iloc[-1])
+                except Exception as atr_error:
+                    logger.warning(f"ATR display unavailable for {product_id}: {atr_error}")
+
                 fees = db.get_fee_rates()
                 maker_fee = fees.get('maker_fee', settings.DEFAULT_MAKER_FEE) if fees else settings.DEFAULT_MAKER_FEE
                 taker_fee = fees.get('taker_fee', settings.DEFAULT_TAKER_FEE) if fees else settings.DEFAULT_TAKER_FEE
-                total_fee = maker_fee + taker_fee
-                
-                # Get regime
                 regime = pos.get('regime', 'neutral')
-                
-                # Get trailing percentage (2% as requested)
-                trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
-                
-                # Get entry and peak
-                entry_price_calc = pos.get('entry_price',0) or 0
+                entry_price_calc = pos.get('entry_price', 0) or 0
                 peak_price = pos.get('peak_price', entry_price_calc)
-                
-                # Calculate break-even (covers fees)
-                break_even = entry_price_calc * (1 + total_fee)
-                
-                # Calculate actual trailing stop (2% below peak, floored below break-even)
-                trailing_stop = peak_price * (1 - trailing_pct)
-                # v2.9.1: Floor is break-even minus buffer, NOT 95% of entry
-                stop_floor = break_even * (1 - trailing_pct)
-                trailing_stop = max(trailing_stop, stop_floor)
-                # v3.4: Raise trailing stop to require min locked-in profit before it can fire
-                min_trail_stop = entry_price_calc * (1 + settings.MIN_LOCKED_PROFIT_FOR_SELL)
-                trailing_stop = max(trailing_stop, min_trail_stop)
-                
-                # Only activate trailing stop after break-even + buffer is reached (once activated, stays active)
-                # Use peak_price to check if we've ever been above break-even + buffer
-                activation_threshold = break_even * (1 + settings.TRAILING_ACTIVATION_BUFFER)
-                peak_activated = peak_price >= activation_threshold
-                # v3.3.1: Dashboard shows "active" only when price is actually in the
-                # profit zone (current >= break-even). Otherwise show "pending" even
-                # if peak crossed BE momentarily — the v2.9.2 guard would block any
-                # sell below break-even anyway, so "active" was misleading.
-                trailing_activated = peak_activated and current_price >= break_even
-                
+                stop_info = calculate_trailing_stop(
+                    current_price=current_price,
+                    entry_price=entry_price_calc,
+                    peak_price=peak_price,
+                    regime=regime,
+                    atr=atr_value,
+                    fixed_stop=settings.TRAILING_STOP_PERCENT,
+                    regime_stops=settings.TRAILING_STOP_REGIME_MAP,
+                    atr_multiplier=2.5,
+                    max_stop=0.05,
+                    maker_fee=maker_fee,
+                    taker_fee=taker_fee,
+                    activation_buffer=settings.TRAILING_ACTIVATION_BUFFER,
+                    min_locked_profit=settings.MIN_LOCKED_PROFIT_FOR_SELL,
+                )
+
                 rows.append({
                     'product_id': product_id,
                     'side': pos.get('side', 'buy').upper(),
@@ -1000,14 +1004,21 @@ async def get_open_positions():
                     'opened_at': pos.get('opened_at'),
                     'status': pos.get('status', 'open'),
                     # Trailing stop info
-                    'break_even': round(break_even, 2),
-                    'unlock_price': round(activation_threshold, 2),  # Price needed for trailing above BE+buffer
+                    'break_even': round(stop_info['break_even'], 2),
+                    'unlock_price': round(stop_info['activation_threshold'], 2),
                     'peak_price': round(peak_price, 2),
-                    'trailing_stop': round(trailing_stop, 2),  # 2% below peak (moves with price)
-                    'stop_floor': round(stop_floor, 2),  # Floor is below break-even
-                    'trailing_activated': trailing_activated,
+                    'trailing_stop': round(stop_info['trailing_stop'], 2),
+                    'stop_floor': round(stop_info['stop_floor'], 2),
+                    'stop_distance': round(stop_info['stop_distance'], 2),
+                    'stop_distance_pct': round(stop_info['stop_distance_pct'] * 100, 2) if stop_info['stop_distance_pct'] is not None else None,
+                    'atr': round(stop_info['atr'], 8) if stop_info['atr'] is not None else None,
+                    'atr_available': stop_info['atr_available'],
+                    'atr_pct': round(stop_info['atr_pct'] * 100, 3) if stop_info['atr_pct'] is not None else None,
+                    'atr_based_stop_pct': round(stop_info['atr_based_stop_pct'] * 100, 3) if stop_info['atr_based_stop_pct'] is not None else None,
+                    'trailing_activated': stop_info['trailing_activated'],
                     'regime': regime,
-                    'trailing_pct': round(trailing_pct * 100, 0)
+                    'trailing_pct': round(stop_info['trailing_pct'] * 100, 3),
+                    'stop_note': 'Active' if stop_info['trailing_activated'] else 'Pending — waits for break-even',
                 })
                 
                 # Update current_price in database for next time
