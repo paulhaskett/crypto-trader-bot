@@ -634,6 +634,7 @@ trailing_stop = max(trailing_stop, entry_price × 0.95)  # Floor at 95% of entry
 | stop_loss_price | Float | Stop loss level (MUST be below entry for long) |
 | peak_price | Float | Highest price since open |
 | remaining_size | Float | Remaining after scale-outs |
+| sell execution | Uses actual Coinbase wallet balance on live sells to avoid leaving dust from rounding mismatches |
 | scale_out_count | Integer | Number of scale-outs |
 
 ### Common Bugs

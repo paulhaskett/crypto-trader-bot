@@ -329,6 +329,11 @@ LOG_BACKUP_COUNT = 5         # Keep 5 backup files
 
 ## 📅 Recent Updates (v1.0.6)
 
+### September 17, 2026 - SOL dust close fix
+- Live sells now read the actual Coinbase wallet balance before placing the sell order
+- This prevents SOL dust from being left behind when rounded buy sizes and DB bookkeeping differ
+- Root cause: SOL-GBP rounds to base_increment 0.001, so full-precision internal sizes could diverge from the real wallet balance
+
 ### January 27, 2026 - Critical Bug Fixes
 
 **1. Currency Switcher Fixed**

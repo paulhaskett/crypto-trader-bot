@@ -132,6 +132,8 @@
         continue
     ```
 
+11. **Dust after closes came from rounding the wrong size on sell** - SOL-GBP showed the pattern clearly: buys computed a full-precision size (e.g. 0.19550129557363768), `coinbase_api._format_size_for_order()` rounded each buy to the product `base_increment` (0.001 for SOL-GBP), but the bot later sold the DB's full-precision `remaining_size` instead of the wallet balance. Two rounded-up buys (0.196 + 0.196) created 0.392 in the wallet, while the DB still tracked 0.39100259114727537; the rounded-down sell of 0.391 left 0.001 SOL stranded. **Fixed 2026-09-17**: `TradingEngine.execute_live_trade()` now reads `coinbase_api.get_account_balance(base_currency)` on every sell and uses that actual balance for the order, so all close paths sell the full wallet amount and leave no dust. Fallback to DB size remains only if the balance read fails.
+
 11. **Ensemble confidence mathematically capped by fake probabilities** - RidgeClassifier has no `predict_proba`, so `signals.py` substitutes a flat placeholder `[0.33, 0.34, 0.33]`. `ensemble.py:_calculate_confidence()` averaged the probas of ALL models — including dissenters and the fake flat proba — capping max confidence at `(1.0+1.0+0.33)/3 ≈ 0.78` and realistic values at 0.55–0.65, right at/below the 65% action threshold. **Result: the bot went dormant (zero BUYs May–Aug 2026)**; the 85% downtrend-buy threshold was unreachable. **Fixed 2026-08-21** in `_calculate_confidence()`:
     ```python
     # Skip models without real probabilities (flat placeholder)
