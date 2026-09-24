@@ -83,6 +83,7 @@ def write_signal_cache(signals: Dict[str, Any]):
         cache_data[product_id] = {
             'action': signal.get('action', 'HOLD'),
             'confidence': signal.get('confidence', 0),
+            'raw_confidence': signal.get('raw_confidence', signal.get('confidence', 0)),
             'regime': signal.get('regime', 'neutral'),
             'reason': signal.get('reason', ''),
             'timestamp': get_timestamp(),
