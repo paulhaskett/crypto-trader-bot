@@ -379,8 +379,8 @@ class ModelTrainer:
         
         # Last resort: return a default config
         if best_config is None:
-            best_config = {'mult': 0.05, 'min': 0.0001}
-            # Silent fallback - default config works fine
+            best_config = {'mult': 2.5, 'min': 0.017}
+            logger.warning(f"No ATR config met validation criteria for {product_id}; using exit-aligned fallback {best_config}")
         
         # Cache result for same data size
         self._atr_config_cache[cache_key] = best_config

@@ -312,11 +312,13 @@ def add_volume_price_divergence(df: pd.DataFrame) -> pd.DataFrame:
     price_dir = df['close'].diff().apply(lambda x: 1 if x > 0 else -1)
     
     # Volume direction (compared to 20-period moving average)
-    volume_ma = df['volume'].rolling(20).mean()
-    volume_dir = (df['volume'] > volume_ma).apply(lambda x: 1 if x else -1)
-    
-    # Divergence: price and volume disagree
-    result['volume_price_div'] = price_dir * volume_dir
-    result['volume_price_div'] = result['volume_price_div'].fillna(0)
+    volume_ma = df['volume'].rolling(20, min_periods=20).mean()
+    valid_volume = volume_ma.notna()
+    volume_dir = pd.Series(0, index=df.index, dtype=int)
+    volume_dir.loc[valid_volume] = (df.loc[valid_volume, 'volume'] > volume_ma.loc[valid_volume]).astype(int).replace({0: -1})
+
+    # Divergence is undefined during the moving-average warm-up; neutral 0
+    # avoids manufacturing a bearish signal from missing volume history.
+    result['volume_price_div'] = (price_dir * volume_dir).where(valid_volume, 0).fillna(0)
     
     return result
