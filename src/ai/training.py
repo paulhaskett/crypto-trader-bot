@@ -17,10 +17,11 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier,
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GridSearchCV, cross_val_score
+from sklearn.model_selection import GridSearchCV, cross_val_score, TimeSeriesSplit
 from sklearn.feature_selection import SelectFromModel
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.frozen import FrozenEstimator
+from sklearn.base import clone
 
 from config.settings import settings
 from .base import logger, CLASS_BUY, CLASS_HOLD, CLASS_SELL
@@ -178,12 +179,14 @@ class ModelTrainer:
                 logger.info(f"Skipping calibration for {product_id}/{model_type}: <3 classes in calib split")
                 return model
 
-            # sklearn 1.9: cv='prefit' was removed; FrozenEstimator(model)
-            # makes the base model immutable, so the default cv only splits
-            # the CALIBRATION rows (X_cal) among the calibrators — the base
-            # model is never refit and test data is never touched.
+            # Fit only on the earlier chronological portion. The frozen
+            # estimator must not have seen calibration rows, otherwise its
+            # probabilities are in-sample and calibration is optimistic.
+            base_model = clone(model)
+            base_model.fit(X_fit, y_fit)
+
             calibrated = CalibratedClassifierCV(
-                FrozenEstimator(model), method='isotonic'
+                FrozenEstimator(base_model), method='isotonic'
             )
             calibrated.fit(X_cal, y_cal)
             logger.info(f"Calibrated {model_type} for {product_id} on {len(X_cal)} held-out rows")
@@ -311,15 +314,29 @@ class ModelTrainer:
                     logger.debug(f"ATR config {cfg}: only {len(unique_classes)} classes (need 3)")
                     continue
                 
-                y_val = targets_test.iloc[:len(y_train)].values
-                
+                y_cfg = targets_test.iloc[:len(X_train)].values
+                if len(y_cfg) != len(X_train):
+                    logger.debug(f"ATR config {cfg}: target/features length mismatch")
+                    continue
+
+                # Use a real chronological validation slice. The previous
+                # code fitted on all rows and predicted an empty tail, so the
+                # grid never selected a configuration from evidence.
+                fit_end = max(int(len(X_train) * 0.8), 1)
+                if len(X_train) - fit_end < 10:
+                    continue
+                X_fit_cfg, X_val_cfg = X_train[:fit_end], X_train[fit_end:]
+                y_fit_cfg, y_val_cfg = y_cfg[:fit_end], y_cfg[fit_end:]
+                prices_val_cfg = prices_train[fit_end:len(X_train)]
+                if len(prices_val_cfg) != len(y_val_cfg):
+                    continue
+
                 rf_test = RandomForestClassifier(n_estimators=50, max_depth=8, random_state=42, n_jobs=-1)
-                
-                rf_test.fit(X_train[:len(y_val)], y_val)
-                y_pred = rf_test.predict(X_train[len(y_val):])
-                
+                rf_test.fit(X_fit_cfg, y_fit_cfg)
+                y_pred = rf_test.predict(X_val_cfg)
+
                 metrics = trading_evaluator.evaluate_trading_performance(
-                    y_train[len(y_val):], y_pred, prices_train[len(y_val):]
+                    y_val_cfg, y_pred, prices_val_cfg
                 )
                 
                 logger.debug(f"ATR config {cfg}: {metrics['num_trades']} trades, {metrics['win_rate']:.1%} win_rate, score={metrics['score']:.3f}")
@@ -341,13 +358,15 @@ class ModelTrainer:
                     if len(unique_classes) < 3:
                         continue
                     
-                    y_val = targets_test.iloc[:len(y_train)].values
+                    y_cfg = targets_test.iloc[:len(X_train)].values
+                    fit_end = max(int(len(X_train) * 0.8), 1)
+                    if len(y_cfg) != len(X_train) or len(X_train) - fit_end < 10:
+                        continue
                     rf_test = RandomForestClassifier(n_estimators=50, max_depth=8, random_state=42, n_jobs=-1)
-                    rf_test.fit(X_train[:len(y_val)], y_val)
-                    y_pred = rf_test.predict(X_train[len(y_val):])
-                    
+                    rf_test.fit(X_train[:fit_end], y_cfg[:fit_end])
+                    y_pred = rf_test.predict(X_train[fit_end:])
                     metrics = trading_evaluator.evaluate_trading_performance(
-                        y_train[len(y_val):], y_pred, prices_train[len(y_val):]
+                        y_cfg[fit_end:], y_pred, prices_train[fit_end:len(X_train)]
                     )
                     
                     # Relaxed: just need 3+ classes, not strict trade count
@@ -384,18 +403,17 @@ class ModelTrainer:
                 'class_weight': ['balanced_subsample']
             }
             
-            # Quick grid search with 3-fold CV
             rf_base = RandomForestClassifier(
                 min_samples_split=5,
                 min_samples_leaf=2,
                 random_state=42,
                 n_jobs=-1
             )
-            
+            time_cv = TimeSeriesSplit(n_splits=3)
             grid_search = GridSearchCV(
                 rf_base, 
                 param_grid, 
-                cv=3, 
+                cv=time_cv,
                 scoring='f1_weighted',
                 n_jobs=-1,
                 verbose=0
@@ -429,7 +447,7 @@ class ModelTrainer:
             
             # Cross-validation score for reporting
             try:
-                cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=3, scoring='f1_weighted')
+                cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=TimeSeriesSplit(n_splits=3), scoring='f1_weighted')
                 logger.info(f"RF CV F1 for {product_id}: {np.mean(cv_scores):.3f} (+/- {np.std(cv_scores):.3f})")
             except Exception:
                 pass

@@ -1877,14 +1877,14 @@ class DatabaseManager:
             pending = session.query(PredictionLog).filter(
                 PredictionLog.evaluated == False,
                 PredictionLog.timestamp <= cutoff
-            ).order_by(PredictionLog.timestamp.asc()).limit(limit).all()
+            ).order_by(PredictionLog.timestamp.asc()).all()
             # Filter in Python: 6h floor above is the DB-level pre-filter;
             # the exact per-row check needs the row's own horizon.
             now = datetime.now()
             pending = [
                 p for p in pending
                 if (now - p.timestamp) >= timedelta(hours=(p.horizon_hours or 6))
-            ]
+            ][:limit]
             return [
                 {
                     'id': p.id,
@@ -1929,29 +1929,21 @@ class DatabaseManager:
 
             pnl_pct = (price_at_horizon - entry) / entry
 
-            # Determine actual direction: 0=down, 1=flat, 2=up
-            if pnl_pct > 0.001:
-                actual_direction = 2
-            elif pnl_pct < -0.001:
-                actual_direction = 0
-            else:
-                actual_direction = 1
-
-            # v3.13: grade against the exit hurdle, not a 0.1% tick.
-            # A BUY that rises +0.3% is "correct" for a tick predictor but
-            # USELESS to this bot — it can never clear fees (~1.1%) plus the
-            # 0.5% locked-profit floor, so it floats underwater. BUY counts
-            # as correct only if the move clears the fee hurdle; SELL only
-            # if the drop clears it (a SELL signal that saves you from a
-            # -0.2% dip isn't worth the round-trip fees either).
-            # EXIT_HURDLE = taker 0.75% × 2 legs + maker→taker buffer ≈ 1.7%,
-            # matching ATR_MIN_THRESHOLD in settings.
+            # Keep directional classification aligned with the same economic
+            # hurdle used for BUY/SELL correctness.
             try:
                 from config.settings import settings as _settings
                 _hurdle = float(getattr(_settings, 'ATR_MIN_THRESHOLD', 0.017))
             except Exception:
                 _hurdle = 0.017
+            if pnl_pct > _hurdle:
+                actual_direction = 2
+            elif pnl_pct < -_hurdle:
+                actual_direction = 0
+            else:
+                actual_direction = 1
 
+            # Grade actions against the exit hurdle, not a tick-sized move.
             if log.signal_action == 'BUY':
                 outcome = 'correct' if pnl_pct > _hurdle else 'wrong'
             elif log.signal_action == 'SELL':

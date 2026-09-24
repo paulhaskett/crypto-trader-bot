@@ -165,9 +165,11 @@ class FeatureEngineer:
                 else:
                     df.iloc[i, df.columns.get_loc('regime_is_neutral')] = 1.0
             
-            df['regime_is_uptrend'] = df['regime_is_uptrend'].bfill().fillna(0.0)
-            df['regime_is_downtrend'] = df['regime_is_downtrend'].bfill().fillna(0.0)
-            df['regime_is_neutral'] = df['regime_is_neutral'].bfill().fillna(1.0)
+            # Warm-up rows stay neutral; never backfill a future regime into
+            # an earlier candle because that leaks future state into training.
+            df['regime_is_uptrend'] = df['regime_is_uptrend'].fillna(0.0)
+            df['regime_is_downtrend'] = df['regime_is_downtrend'].fillna(0.0)
+            df['regime_is_neutral'] = df['regime_is_neutral'].fillna(1.0)
             
             return df
             

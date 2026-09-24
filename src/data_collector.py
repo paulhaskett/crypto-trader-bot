@@ -676,8 +676,14 @@ class DataCollector:
             # Volume ratio
             df['volume_ratio'] = df['volume'] / df['volume_sma']
 
-            # Volatility percentile (relative to recent period)
-            df['volatility_percentile'] = df['volatility'].rank(pct=True)
+            # Use only information available up to each row. Full-dataset
+            # rank(pct=True) leaks future volatility distribution into the
+            # historical feature.
+            df['volatility_percentile'] = (
+                df['volatility'].expanding(min_periods=20)
+                .apply(lambda values: float(pd.Series(values).rank(pct=True).iloc[-1]), raw=False)
+                .fillna(0.5)
+            )
 
             # ============================================================
             # v1.9.0: ATR (Average True Range) for dynamic threshold

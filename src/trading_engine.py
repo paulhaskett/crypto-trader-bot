@@ -297,24 +297,33 @@ class TradingEngine:
         """
         try:
             signals_for_cache = {}
+            try:
+                live_prices = data_collector.get_current_prices()
+            except Exception:
+                live_prices = {}
             for product_id in settings.PRODUCT_IDS:
                 signal = ai_model.get_signal(product_id)
                 signals_for_cache[product_id] = signal
 
-                # v3.8: Log prediction for later accuracy evaluation.
+                # v3.14: record the same current consensus quote used by the
+                # execution path, not the last completed hourly candle.
                 # Recorded every cycle so we can measure AI accuracy over time
                 # and identify false positives (signals that didn't pan out).
                 try:
                     regime = signal.get('regime') or 'unknown'
-                    # Price isn't in the signal dict; fetch from market_data latest close
-                    price_now = None
-                    try:
-                        from src.database import db_manager as _dbm
-                        latest = _dbm.get_market_data(product_id)
-                        if latest and 'close' in latest[0]:
-                            price_now = float(latest[0]['close'])
-                    except Exception:
-                        pass
+                    # Price is captured from the live consensus snapshot above.
+                    price_now = live_prices.get(product_id)
+                    if price_now is not None:
+                        price_now = float(price_now)
+                    # Fallback only when the live quote is unavailable.
+                    if price_now is None:
+                        try:
+                            from src.database import db_manager as _dbm
+                            latest = _dbm.get_market_data(product_id)
+                            if latest and 'close' in latest[0]:
+                                price_now = float(latest[0]['close'])
+                        except Exception:
+                            pass
                     db_manager.save_prediction_log(
                         product_id=product_id,
                         signal_action=signal.get('action', 'HOLD'),
@@ -1247,14 +1256,19 @@ class TradingEngine:
                         )
                         
                         # Actually execute the sell order on Coinbase (not just update record!)
+                        close_confirmed = self.paper_trading
                         if not self.paper_trading and sell_size > 0:
                             try:
                                 order_result = self.execute_live_trade(product_id, 'sell', sell_size)
+                                close_confirmed = bool(order_result and order_result.get('success') is True)
                                 logger.info(f"[TRAILING STOP] Sell order result: {order_result}")
                             except Exception as e:
                                 logger.error(f"[TRAILING STOP] Failed to execute sell: {e}")
+                        if not close_confirmed:
+                            logger.error(f"[TRAILING STOP] Keeping {product_id} open because sell was not verified")
+                            continue
                         
-                        # Update position record in DB
+                        # Update position record in DB only after a verified fill.
                         self._close_position(position_id, pnl, exit_reason, current_price)
                         closed_positions.append({
                             'position_id': position_id,
@@ -1541,6 +1555,9 @@ class TradingEngine:
                         try:
                             order_result = self.execute_live_trade(product_id, 'sell', sell_size)
                             logger.info(f"[WS TRAILING STOP] Sell order result: {order_result}")
+                            if not order_result or order_result.get('success') is not True:
+                                logger.error(f"[WS TRAILING STOP] Keeping {product_id} open because sell was not verified")
+                                return
                         except Exception as e:
                             logger.error(f"[WS TRAILING STOP] Failed to execute sell: {e}")
                             return

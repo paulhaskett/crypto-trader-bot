@@ -9,6 +9,7 @@ This module provides:
 """
 
 import numpy as np
+import math
 from typing import Dict, Any, List, Optional, Tuple
 from collections import Counter
 
@@ -67,6 +68,10 @@ class EnsemblePredictor:
             if n_models == 0:
                 return self._default_result()
             
+            # A three-class prediction uses label 2 for BUY. If RF is
+            # unavailable, do not silently interpret that label as binary.
+            if any(v not in (0, 1) for v in vote_list):
+                n_classes = 3
             n_classes = max(n_classes, 2)  # At least binary
             
             if n_classes >= 3:
@@ -94,16 +99,11 @@ class EnsemblePredictor:
         buy_votes = sum(1 for v in vote_list if v == CLASS_BUY)
         sell_votes = sum(1 for v in vote_list if v == CLASS_SELL)
         
-        votes_needed = max(2, int(self.vote_threshold * n_models))
-        fallback_votes_needed = max(2, int(0.66 * n_models))
+        votes_needed = max(2, math.ceil(self.vote_threshold * n_models))
         
         if buy_votes >= votes_needed:
             majority_vote = CLASS_BUY
         elif sell_votes >= votes_needed:
-            majority_vote = CLASS_SELL
-        elif buy_votes >= fallback_votes_needed and n_models >= 3:
-            majority_vote = CLASS_BUY
-        elif sell_votes >= fallback_votes_needed and n_models >= 3:
             majority_vote = CLASS_SELL
         else:
             majority_vote = CLASS_HOLD
@@ -131,7 +131,7 @@ class EnsemblePredictor:
     def _predict_binary(self, vote_list: List[int], probas: Dict[str, List[float]],
                         n_models: int) -> Dict[str, Any]:
         """Predict with binary labels (BUY=1, SELL=0)."""
-        votes_needed = max(2, int(self.vote_threshold * n_models))
+        votes_needed = max(2, math.ceil(self.vote_threshold * n_models))
         
         buy_count = sum(vote_list)
         majority_vote = CLASS_BUY if buy_count >= votes_needed else CLASS_SELL

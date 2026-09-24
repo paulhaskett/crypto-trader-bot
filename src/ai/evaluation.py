@@ -12,6 +12,7 @@ import pandas as pd
 from typing import Dict, Any, List, Optional
 
 from .base import logger, CLASS_BUY, CLASS_SELL, CLASS_HOLD
+from config.settings import settings
 
 
 class TradingEvaluator:
@@ -41,11 +42,13 @@ class TradingEvaluator:
         return self.evaluate_trading_performance(y_true, y_pred, prices)
     
     def evaluate_trading_performance(self, y_true: np.ndarray, y_pred: np.ndarray,
-                                     prices: np.ndarray) -> Dict[str, Any]:
+                                     prices: np.ndarray,
+                                     horizon: Optional[int] = None) -> Dict[str, Any]:
         """
         Simulate trades and calculate performance metrics.
         
-        Assumes going long on BUY signals and exiting at next candle.
+        Assumes a BUY/SELL signal is evaluated over the same hourly horizon
+        used by the training labels, rather than only the next candle.
         
         Args:
             y_true: True labels
@@ -55,16 +58,17 @@ class TradingEvaluator:
         Returns:
             Dict with trading metrics
         """
+        horizon = max(1, int(horizon or settings.PREDICTION_HORIZON))
         if len(y_true) != len(y_pred) or len(y_pred) != len(prices):
             logger.warning(f"Length mismatch: y_true={len(y_true)}, y_pred={len(y_pred)}, prices={len(prices)}")
             return {'score': 0, 'win_rate': 0, 'profit_factor': 0, 'total_pnl': 0, 'num_trades': 0}
         
         trades = []
         
-        for i in range(len(y_pred) - 1):
+        for i in range(len(y_pred) - horizon):
             signal = y_pred[i]
             entry_price = prices[i]
-            exit_price = prices[i + 1]
+            exit_price = prices[i + horizon]
             
             if signal == CLASS_BUY:  # BUY signal → long position
                 pnl_pct = (exit_price - entry_price) / entry_price
