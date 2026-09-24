@@ -91,6 +91,15 @@ class Settings:
     BUY_COOLDOWN_AFTER_LOSS_HOURS: int = 12  # Don't buy same pair within 12h after losing trade
     BUY_MAX_ATTEMPTS_PER_DAY: int = 1  # Maximum 1 buy attempt per pair per day
 
+    # Initial BUY trough confirmation. This waits for price action to rebound
+    # after a local low; it does not attempt to predict the exact bottom.
+    ENTRY_TROUGH_CONFIRMATION_ENABLED: bool = True
+    ENTRY_TROUGH_LOOKBACK_HOURS: int = 12
+    ENTRY_TROUGH_ATR_MULTIPLIER: float = 0.75
+    ENTRY_TROUGH_MIN_REBOUND_PCT: float = 0.005  # 0.5% minimum rebound
+    ENTRY_TROUGH_CONFIRMATION_CLOSES: int = 2
+    ENTRY_TROUGH_MAX_CANDLE_AGE_HOURS: float = 3.0
+
     # Position Scaling (Averaging Down) - Single Scale-In (lowest fees)
     # Policy (user direction 2026-08-23): scale in ONCE per pair at the trough,
     # only when AI confirms it's likely to bounce. Flat 3% drop threshold across

@@ -1098,56 +1098,72 @@ class CoinbaseAPI:
                     logger.info(f"[DEBUG] SDK order response type: {type(order)}")
                     logger.info(f"[DEBUG] SDK order response attributes: {dir(order)}")
                     
-                    # Extract order details from SDK response
+                    # Extract order details from SDK response. Coinbase nests the
+                    # real order ID inside success_response; raw dicts and typed
+                    # SDK objects are both returned by different SDK versions.
                     if hasattr(order, 'success') and order.success:
-                        order_id = getattr(order, 'order_id', f"sdk_order_{int(time.time())}")
-                        
-                        # Fetch order details to get actual filled price and fees
+                        success_response = getattr(order, 'success_response', None)
+                        if isinstance(success_response, dict):
+                            order_id = success_response.get('order_id')
+                        else:
+                            order_id = getattr(success_response, 'order_id', None)
+                        if not order_id:
+                            logger.error("[DEBUG] SDK success response contained no order ID")
+                            return {
+                                'success': False,
+                                'error': 'SDK success response contained no order ID',
+                                'mode': 'live_sdk_failed',
+                            }
+
+                        # Fetch order details to get actual filled price, status and fees.
                         filled_price = 0.0
                         total_fees = 0.0
+                        order_status = ''
                         try:
                             order_details = self.get_order(order_id)
-                            if order_details:
-                                # Try to extract average fill price from order details
-                                if 'order' in order_details:
-                                    order_info = order_details['order']
-                                    # Check for filled value and size to calculate average price
-                                    total_value = float(order_info.get('total_value', {}).get('value', 0))
-                                    base_size = float(order_info.get('filled_base_volume', 0))
-                                    if base_size > 0:
-                                        filled_price = total_value / base_size
-                                        logger.info(f"[DEBUG] Fetched fill price: {filled_price} for order {order_id}")
-                                    # Extract total_fees from order details
-                                    total_fees = float(order_info.get('total_fees', 0))
-                                    logger.info(f"[DEBUG] Fetched fees: {total_fees} for order {order_id}")
+                            if order_details and 'order' in order_details:
+                                order_info = order_details['order']
+                                order_status = str(order_info.get('status', '')).upper()
+                                total_value = float(order_info.get('total_value', {}).get('value', 0))
+                                base_size = float(order_info.get('filled_base_volume', 0))
+                                if base_size > 0:
+                                    filled_price = total_value / base_size
+                                total_fees = float(order_info.get('total_fees', 0))
                         except Exception as e:
                             logger.warning(f"[DEBUG] Could not fetch order details: {e}")
-                        
-                        # If still no price, try using client_order_id
-                        if filled_price == 0.0:
+
+                        # OPEN is not a failure, but it must settle before the
+                        # engine records a position. Never place a duplicate retry.
+                        if order_status == 'OPEN':
+                            time.sleep(2)
                             try:
-                                client_order_id = f"bot_{int(time.time())}_{attempt}"
-                                order_details = self.get_order(client_order_id)
-                                if order_details and 'order' in order_details:
-                                    order_info = order_details['order']
-                                    total_value = float(order_info.get('total_value', {}).get('value', 0))
-                                    base_size = float(order_info.get('filled_base_volume', 0))
-                                    if base_size > 0:
-                                        filled_price = total_value / base_size
-                                        logger.info(f"[DEBUG] Fetched fill price via client_order_id: {filled_price}")
+                                order_details = self.get_order(order_id)
+                                order_info = (order_details or {}).get('order', {})
+                                order_status = str(order_info.get('status', '')).upper()
+                                total_value = float(order_info.get('total_value', {}).get('value', 0))
+                                base_size = float(order_info.get('filled_base_volume', 0))
+                                if base_size > 0:
+                                    filled_price = total_value / base_size
+                                total_fees = float(order_info.get('total_fees', 0))
                             except Exception as e:
-                                logger.warning(f"[DEBUG] Could not fetch via client_order_id: {e}")
-                        
-                        # Last resort: use current market price as fallback
-                        if filled_price == 0.0:
-                            try:
-                                ticker = self.get_product_ticker(product_id)
-                                if ticker and 'price' in ticker:
-                                    filled_price = float(ticker['price'])
-                                    logger.info(f"[DEBUG] Using market price as fallback: {filled_price}")
-                            except Exception:
-                                pass
-                        
+                                logger.warning(f"[DEBUG] Could not recheck OPEN order: {e}")
+
+                        if order_status == 'CANCELLED':
+                            return {
+                                'success': False,
+                                'error': 'Coinbase order cancelled',
+                                'order_id': order_id,
+                                'mode': 'live_sdk_failed',
+                            }
+                        if filled_price <= 0:
+                            logger.error(f"[DEBUG] Order {order_id} has no verified fill; refusing market-price fallback")
+                            return {
+                                'success': False,
+                                'error': 'Order has no verified fill',
+                                'order_id': order_id,
+                                'mode': 'live_sdk_unverified',
+                            }
+
                         sdk_result = {
                             'success': True,
                             'order_id': order_id,
@@ -1200,15 +1216,16 @@ class CoinbaseAPI:
                         # Fall through to REST
 
                 except Exception as e:
-                    delay = base_delay * (2 ** attempt)
-                    logger.error(f"[DEBUG] SDK order EXCEPTION (attempt {attempt + 1}/{max_retries}): {e}")
-                    if attempt < max_retries - 1:
-                        logger.info(f"[DEBUG] Retrying in {delay}s...")
-                        time.sleep(delay)
-                    else:
-                        logger.error(f"[DEBUG] SDK failed after {max_retries} attempts, falling back to REST")
-                        import traceback
-                        logger.error(f"[DEBUG] SDK exception traceback: {traceback.format_exc()}")
+                    # A timeout is ambiguous: Coinbase may have accepted the
+                    # market order. Retrying or falling through to REST can
+                    # create a duplicate buy. Leave reconciliation to the
+                    # wallet sync instead of placing another order blindly.
+                    logger.error(f"[DEBUG] SDK order exception; refusing retry: {e}")
+                    return {
+                        'success': False,
+                        'error': f"SDK order outcome unknown: {e}",
+                        'mode': 'live_sdk_unknown',
+                    }
 
         # Fallback to REST implementation
         try:

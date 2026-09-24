@@ -29,6 +29,7 @@ from src.database import db_manager
 from src.cache_manager import write_signal_cache
 from src.feature_engineering import add_temporal_features, add_volume_price_divergence, calculate_atr
 from src.trailing_stop import calculate_trailing_stop
+from src.entry_confirmation import confirm_trough_rebound
 from typing import Tuple
 
 logger = logging.getLogger(__name__)
@@ -396,6 +397,22 @@ class TradingEngine:
                 if signal['action'] != 'HOLD':
                     # Validate signal with risk management
                     if self._validate_signal(signal, product_id):
+                        if signal['action'] == 'BUY':
+                            confirmation = self._confirm_initial_buy_entry(product_id, signal)
+                            if not confirmation.confirmed:
+                                logger.info(
+                                    f"[ENTRY WAIT] {product_id}: {confirmation.reason} "
+                                    f"candidate_low={confirmation.candidate_low:.2f} "
+                                    f"confirmation_level={confirmation.confirmation_level:.2f}"
+                                )
+                                continue
+                            signal['entry_confirmation'] = confirmation.as_dict()
+                            logger.info(
+                                f"[ENTRY CONFIRMED] {product_id}: "
+                                f"low=£{confirmation.candidate_low:.2f} "
+                                f"level=£{confirmation.confirmation_level:.2f} "
+                                f"atr={confirmation.atr:.2f}"
+                            )
                         signals.append({
                             'product_id': product_id,
                             'signal': signal,
@@ -408,6 +425,35 @@ class TradingEngine:
                 continue
 
         return signals
+
+    def _confirm_initial_buy_entry(self, product_id: str, signal: Dict[str, Any]):
+        """Apply the ATR-scaled trough gate to an initial BUY signal.
+
+        The signal remains the model's directional decision; this deterministic
+        gate prevents execution while completed candles are still making lows.
+        """
+        if not settings.ENTRY_TROUGH_CONFIRMATION_ENABLED:
+            from src.entry_confirmation import EntryConfirmation
+            return EntryConfirmation(True, "entry confirmation disabled")
+
+        candles = db_manager.get_market_data(
+            product_id,
+            limit=max(
+                settings.ENTRY_TROUGH_LOOKBACK_HOURS + settings.ATR_PERIOD + 4,
+                64,
+            ),
+        )
+        current_price = float(signal.get('entry_price') or 0.0)
+        return confirm_trough_rebound(
+            candles,
+            current_price,
+            lookback=settings.ENTRY_TROUGH_LOOKBACK_HOURS,
+            atr_period=settings.ATR_PERIOD,
+            atr_multiplier=settings.ENTRY_TROUGH_ATR_MULTIPLIER,
+            min_rebound_pct=settings.ENTRY_TROUGH_MIN_REBOUND_PCT,
+            confirmation_closes=settings.ENTRY_TROUGH_CONFIRMATION_CLOSES,
+            max_candle_age_hours=settings.ENTRY_TROUGH_MAX_CANDLE_AGE_HOURS,
+        )
 
     def _should_trade_product(self, product_id: str) -> bool:
         """
@@ -592,6 +638,12 @@ class TradingEngine:
                 
                 # Create entry_reason for tracking why position was opened
                 entry_reason = f"AI {action}, conf={confidence:.0%}, regime={regime}"
+                entry_confirmation = signal.get('entry_confirmation')
+                if entry_confirmation and entry_confirmation.get('confirmed'):
+                    entry_reason += (
+                        f", trough confirmed at £{entry_confirmation['candidate_low']:.2f}"
+                        f" / level £{entry_confirmation['confirmation_level']:.2f}"
+                    )
                 
                 position_details = {
                     'position_id': position_id,
