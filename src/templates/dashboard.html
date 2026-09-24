@@ -56,6 +56,9 @@
         .table-container { background: white; border-radius: 10px; overflow: hidden; }
         .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1050; }
         .card-icon { font-size: 2rem; opacity: 0.8; }
+        .signal-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+        .sparkline { width: 118px; height: 38px; display: block; overflow: visible; }
+        .sparkline-empty { width: 118px; height: 38px; text-align: right; color: #adb5bd; font-size: 0.8rem; }
     </style>
 </head>
 <body>
@@ -532,6 +535,20 @@
             }
         }
 
+        function renderSparkline(values, signal) {
+            const points = (values || []).map(Number).filter(Number.isFinite);
+            if (points.length < 2) return '<div class="sparkline-empty">--</div>';
+            const min = Math.min(...points), max = Math.max(...points);
+            const span = max - min || Math.max(Math.abs(max) * 0.001, 0.00000001);
+            const coords = points.map((value, index) => {
+                const x = (index / (points.length - 1)) * 100;
+                const y = 30 - ((value - min) / span) * 26;
+                return `${x.toFixed(1)},${y.toFixed(1)}`;
+            }).join(' ');
+            const colour = signal === 'BUY' ? '#198754' : signal === 'SELL' ? '#dc3545' : '#0d6efd';
+            return `<svg class="sparkline" viewBox="0 0 100 32" role="img" aria-label="Recent price movement"><polyline points="${coords}" fill="none" stroke="${colour}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline></svg>`;
+        }
+
         async function updateSignals() {
             const d = await fetchJSON(API.signals);
             const grid = document.getElementById('signals-grid');
@@ -566,8 +583,10 @@
                 <div class="col-md-3">
                     <div class="card signal-card ${cls}">
                         <div class="card-body py-2">
-                            <h6><i class="${icons[sym] || 'fas fa-coins'} me-1"></i>${pid}</h6>
-                            <h4 class="text-primary">${info.formatted_price || 'N/A'}</h4>
+                            <div class="signal-card-head">
+                                <div><h6><i class="${icons[sym] || 'fas fa-coins'} me-1"></i>${pid}</h6><h4 class="text-primary mb-0">${info.formatted_price || 'N/A'}</h4></div>
+                                ${renderSparkline(info.price_history, sig)}
+                            </div>
                             <div class="mb-2">
                                 <span class="badge bg-${bdg}">${sig}</span>
                                 <span class="badge bg-${meets ? 'success' : 'secondary'}">${meets ? 'TRADE' : 'WAIT'}</span>

@@ -787,6 +787,15 @@ async def get_market_conditions():
             try:
                 ticker = coinbase.get_product_ticker(product_id)
                 price = ticker.get('price', 0) or 0
+                try:
+                    history_rows = db.get_market_data(product_id, limit=24)
+                    price_history = [round(float(row.get('close', 0)), 8) for row in reversed(history_rows) if float(row.get('close', 0) or 0) > 0]
+                    if price:
+                        price_history.append(round(float(price), 8))
+                    price_history = price_history[-25:]
+                except Exception as history_error:
+                    logger.debug(f"Price history unavailable for {product_id}: {history_error}")
+                    price_history = [round(float(price), 8)] if price else []
                 
                 signal_data = cache.get(product_id, {})
                 signal = signal_data.get('action', 'HOLD')
@@ -896,6 +905,7 @@ async def get_market_conditions():
                 conditions[product_id] = {
                     'price': round(price, 2),
                     'formatted_price': f"{symbol}{price:,.2f}",
+                    'price_history': price_history,
                     'signal': signal,
                     'confidence': round(confidence, 1),
                     'raw_confidence': round(raw_confidence, 1),
@@ -918,6 +928,7 @@ async def get_market_conditions():
                 conditions[product_id] = {
                     'price': 0,
                     'formatted_price': 'N/A',
+                    'price_history': [],
                     'signal': 'HOLD',
                     'confidence': 0,
                     'raw_confidence': 0,
