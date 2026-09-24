@@ -205,7 +205,11 @@ class PredictionLog(Base):
 
     # Signal at time of prediction
     signal_action = Column(String(10), nullable=False)  # BUY / SELL / HOLD
+    # Signal confidence at generation time. signal_confidence is the
+    # risk-adjusted/operational confidence; raw_confidence preserves the
+    # ensemble output before regime and volatility penalties.
     signal_confidence = Column(Float, nullable=False)
+    raw_confidence = Column(Float, nullable=True)
     regime = Column(String(20))
     price_at_signal = Column(Float)
 
@@ -651,6 +655,56 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to get trades: {e}")
             return []
+        finally:
+            session.close()
+
+    def calculate_realized_pnl(self, product_id: str, sell_size: float,
+                               sell_price: float, sell_fees: float = 0.0) -> Optional[float]:
+        """Calculate realized P&L from verified fills using FIFO cost basis.
+
+        Buy fees are included in cost and the verified sell fee is deducted
+        from proceeds. Returns None when the database cannot establish a
+        complete cost basis; callers must not invent a P&L in that case.
+        """
+        session = self.get_session()
+        try:
+            fills = session.query(Trade).filter(
+                Trade.product_id == product_id,
+                Trade.status == 'filled'
+            ).order_by(Trade.timestamp.asc(), Trade.id.asc()).all()
+            lots = []
+            for fill in fills:
+                if fill.side.lower() == 'buy':
+                    lots.append([float(fill.size), float(fill.price) * float(fill.size) + float(fill.fees or 0.0)])
+                elif fill.side.lower() == 'sell':
+                    remaining = float(fill.size)
+                    while remaining > 1e-12 and lots:
+                        qty, cost = lots[0]
+                        used = min(qty, remaining)
+                        qty_cost = cost * used / qty
+                        qty -= used
+                        cost -= qty_cost
+                        remaining -= used
+                        if qty <= 1e-12:
+                            lots.pop(0)
+                        else:
+                            lots[0] = [qty, cost]
+            if not lots or sum(qty for qty, _ in lots) + 1e-9 < sell_size:
+                return None
+            remaining = float(sell_size)
+            cost_basis = 0.0
+            for qty, cost in lots:
+                used = min(qty, remaining)
+                cost_basis += cost * used / qty
+                remaining -= used
+                if remaining <= 1e-12:
+                    break
+            if remaining > 1e-9:
+                return None
+            return float(sell_price) * float(sell_size) - float(sell_fees or 0.0) - cost_basis
+        except Exception as e:
+            logger.error(f"Failed to calculate realized P&L for {product_id}: {e}")
+            return None
         finally:
             session.close()
 
@@ -1835,7 +1889,8 @@ class DatabaseManager:
     def save_prediction_log(self, product_id: str, signal_action: str,
                               signal_confidence: float, regime: str = None,
                               price_at_signal: float = None,
-                              horizon_hours: int = 12) -> Optional[int]:
+                              horizon_hours: int = 12,
+                              raw_confidence: float = None) -> Optional[int]:
         """Record an AI signal for later accuracy evaluation.
 
         Called when a signal is generated. A separate evaluator fills in
@@ -1847,6 +1902,7 @@ class DatabaseManager:
                 product_id=product_id,
                 signal_action=signal_action,
                 signal_confidence=signal_confidence,
+                raw_confidence=raw_confidence if raw_confidence is not None else signal_confidence,
                 regime=regime,
                 price_at_signal=price_at_signal,
                 horizon_hours=horizon_hours,

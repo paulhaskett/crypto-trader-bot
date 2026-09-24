@@ -1167,7 +1167,7 @@ class CoinbaseAPI:
                         sdk_result = {
                             'success': True,
                             'order_id': order_id,
-                            'size': size,
+                            'size': base_size if base_size > 0 else size,
                             'price': filled_price,
                             'fees': total_fees,
                             'mode': 'live_sdk',

@@ -328,6 +328,7 @@ class TradingEngine:
                         product_id=product_id,
                         signal_action=signal.get('action', 'HOLD'),
                         signal_confidence=float(signal.get('confidence', 0)),
+                        raw_confidence=float(signal.get('raw_confidence', signal.get('confidence', 0))),
                         regime=regime,
                         price_at_signal=price_now,
                         horizon_hours=settings.PREDICTION_HORIZON
@@ -808,6 +809,18 @@ class TradingEngine:
                 # Extract actual fees from order result (fetched from Coinbase API)
                 fees = order_result.get('fees', 0.0)
                 
+                # A sell fill's P&L is reconciled from verified Coinbase
+                # price/size/fee data against the stored FIFO buy cost basis.
+                realized_pnl = None
+                if side.lower() == 'sell':
+                    realized_pnl = db_manager.calculate_realized_pnl(
+                        product_id,
+                        float(order_result.get('size', 0.0)),
+                        float(order_result.get('price', 0.0)),
+                        fees
+                    )
+                    if realized_pnl is None:
+                        logger.warning(f"No complete verified cost basis for {order_result.get('order_id')}; sell P&L left unreconciled")
                 # Save to database
                 trade_data = {
                     'order_id': order_result.get('order_id', 'N/A'),
@@ -817,13 +830,14 @@ class TradingEngine:
                     'price': order_result.get('price', 0.0),
                     'timestamp': datetime.now(),
                     'status': 'filled',
-                    'pnl': 0.0,
+                    'pnl': realized_pnl if realized_pnl is not None else 0.0,
                     'fees': fees,
                     'trade_type': 'live'  # Explicitly set to live
                 }
 
                 db_manager.save_trade(trade_data)
 
+                order_result['realized_pnl'] = realized_pnl
                 logger.info(f"Live order executed: {order_result}")
                 return order_result
 
@@ -1260,6 +1274,8 @@ class TradingEngine:
                         if not self.paper_trading and sell_size > 0:
                             try:
                                 order_result = self.execute_live_trade(product_id, 'sell', sell_size)
+                                if order_result and order_result.get('realized_pnl') is not None:
+                                    pnl = float(order_result['realized_pnl'])
                                 close_confirmed = bool(order_result and order_result.get('success') is True)
                                 logger.info(f"[TRAILING STOP] Sell order result: {order_result}")
                             except Exception as e:
@@ -1554,6 +1570,8 @@ class TradingEngine:
                     if not self.paper_trading:
                         try:
                             order_result = self.execute_live_trade(product_id, 'sell', sell_size)
+                            if order_result and order_result.get('realized_pnl') is not None:
+                                pnl = float(order_result['realized_pnl'])
                             logger.info(f"[WS TRAILING STOP] Sell order result: {order_result}")
                             if not order_result or order_result.get('success') is not True:
                                 logger.error(f"[WS TRAILING STOP] Keeping {product_id} open because sell was not verified")
