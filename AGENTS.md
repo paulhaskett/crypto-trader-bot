@@ -174,6 +174,12 @@
 
     **Class-level pattern**: A prediction pipeline must be graded on the question the *execution* layer asks. If labels measure "any tick up" but exits need "+1.6% to clear fees", the model scores well while the portfolio bleeds, and the feedback loop actively reinforces bad entries. Label thresholds, evaluation thresholds, and exit economics must derive from one shared constant.
 
+21. **Training/evaluation correctness and fill accounting [FIXED 2026-09-24, v3.14]** - Fixed the broken ATR validation slice, calibration leakage, non-chronological CV, regime `.bfill()` leakage, full-dataset volatility ranking leakage, 24h-vs-1h evaluation mismatch, ensemble vote truncation, and mixed class handling. Prediction evaluation now grades against the historical candle at each row's configured horizon. `prediction_logs.raw_confidence` preserves unadjusted model confidence; legacy rows are backfilled from adjusted confidence because original raw values were unavailable. Verified Coinbase sell fills now drive FIFO realized P&L: buy fees enter cost basis and sell fees reduce proceeds. Historical migration reconciled 67 sell fills; 10 remained unreconciled because no complete buy basis was recorded. Migrations: `migrations/add_raw_confidence.py`, `migrations/reconcile_trade_pnl.py`. Do not guess missing cost basis or P&L.
+
+    **Deployment:** use `docker cp` for source changes, run migrations inside `crypto-trader-bot`, restart, and verify `/api/health`. Commits: `19bd8e3`, `200b06f`.
+
+    **Class-level pattern:** Evaluate ML on the same chronological horizon and economic hurdle used by execution, and reconcile accounting from verified fills rather than position estimates.
+
 ### Key Configuration
 
 | Setting | Value | Purpose |
