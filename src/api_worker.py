@@ -28,6 +28,7 @@ TEMPLATES_DIR = BASE_DIR / 'src' / 'templates'
 
 from src.cache_manager import SIGNAL_CACHE_FILE, LAST_CYCLE_FILE
 from src.portfolio_utils import account_value_gbp
+from src.entry_confirmation import confirm_trough_rebound
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -765,6 +766,7 @@ async def get_market_conditions():
     try:
         settings = load_settings()
         coinbase = load_coinbase_api()
+        db = load_db_manager()
         cache = read_signal_cache()
         
         display_currency = 'GBP'
@@ -789,7 +791,58 @@ async def get_market_conditions():
                 signal_data = cache.get(product_id, {})
                 signal = signal_data.get('action', 'HOLD')
                 confidence = (signal_data.get('confidence', 0) or 0) * 100
+                raw_confidence = (signal_data.get('raw_confidence', signal_data.get('confidence', 0)) or 0) * 100
                 regime = signal_data.get('regime', 'neutral')
+
+                # Mirror the live initial-BUY gate so the dashboard explains
+                # why a high-confidence BUY may still be waiting.
+                entry_gate = {
+                    'enabled': settings.ENTRY_TROUGH_CONFIRMATION_ENABLED,
+                    'confirmed': False,
+                    'reason': 'not applicable (signal is not BUY)',
+                    'candidate_low': None,
+                    'confirmation_level': None,
+                    'atr': None,
+                    'atr_pct': None,
+                }
+                if settings.ENTRY_TROUGH_CONFIRMATION_ENABLED and signal == 'BUY':
+                    try:
+                        gate_candles = db.get_market_data(
+                            product_id,
+                            limit=max(settings.ENTRY_TROUGH_LOOKBACK_HOURS + settings.ATR_PERIOD + 4, 64),
+                        )
+                        gate = confirm_trough_rebound(
+                            gate_candles,
+                            float(price),
+                            lookback=settings.ENTRY_TROUGH_LOOKBACK_HOURS,
+                            atr_period=settings.ATR_PERIOD,
+                            atr_multiplier=settings.ENTRY_TROUGH_ATR_MULTIPLIER,
+                            min_rebound_pct=settings.ENTRY_TROUGH_MIN_REBOUND_PCT,
+                            confirmation_closes=settings.ENTRY_TROUGH_CONFIRMATION_CLOSES,
+                            max_candle_age_hours=settings.ENTRY_TROUGH_MAX_CANDLE_AGE_HOURS,
+                        )
+                        entry_gate = {
+                            'enabled': True,
+                            'confirmed': gate.confirmed,
+                            'reason': gate.reason,
+                            'candidate_low': round(gate.candidate_low, 2) if gate.candidate_low else None,
+                            'confirmation_level': round(gate.confirmation_level, 2) if gate.confirmation_level else None,
+                            'atr': round(gate.atr, 2) if gate.atr else None,
+                            'atr_pct': round(gate.atr_pct * 100, 3) if gate.atr_pct else None,
+                        }
+                    except Exception as gate_error:
+                        entry_gate['reason'] = f'gate unavailable: {gate_error}'
+
+                signal_age_seconds = None
+                signal_timestamp = signal_data.get('timestamp')
+                if signal_timestamp:
+                    try:
+                        signal_dt = datetime.fromisoformat(str(signal_timestamp).replace('Z', '+00:00'))
+                        if signal_dt.tzinfo is None:
+                            signal_dt = signal_dt.replace(tzinfo=ZoneInfo('UTC'))
+                        signal_age_seconds = max(0, int((datetime.now(signal_dt.tzinfo) - signal_dt).total_seconds()))
+                    except (TypeError, ValueError):
+                        signal_age_seconds = None
                 
                 # Load accuracy from training results
                 accuracy = 0
@@ -845,8 +898,13 @@ async def get_market_conditions():
                     'formatted_price': f"{symbol}{price:,.2f}",
                     'signal': signal,
                     'confidence': round(confidence, 1),
+                    'raw_confidence': round(raw_confidence, 1),
+                    'signal_timestamp': signal_timestamp,
+                    'signal_age_seconds': signal_age_seconds,
                     'agreement': round(agreement * 100, 0),
                     'unanimous': unanimous,
+                    'threshold_pct': round(settings.MODEL_CONFIDENCE_THRESHOLD * 100, 1),
+                    'entry_gate': entry_gate,
                     'threshold_reason': threshold_reason,
                     'regime': regime,
                     'action': 'TRADE' if (signal in ['BUY', 'SELL'] and confidence >= settings.MODEL_CONFIDENCE_THRESHOLD * 100) else 'WAIT',
@@ -862,8 +920,13 @@ async def get_market_conditions():
                     'formatted_price': 'N/A',
                     'signal': 'HOLD',
                     'confidence': 0,
+                    'raw_confidence': 0,
+                    'signal_timestamp': None,
+                    'signal_age_seconds': None,
                     'agreement': 0,
                     'unanimous': False,
+                    'threshold_pct': round(settings.MODEL_CONFIDENCE_THRESHOLD * 100, 1),
+                    'entry_gate': {'enabled': settings.ENTRY_TROUGH_CONFIRMATION_ENABLED, 'confirmed': False, 'reason': 'market data unavailable'},
                     'threshold_reason': '',
                     'regime': 'unknown',
                     'action': 'WAIT',
@@ -968,6 +1031,19 @@ async def get_open_positions():
                 regime = pos.get('regime', 'neutral')
                 entry_price_calc = pos.get('entry_price', 0) or 0
                 peak_price = pos.get('peak_price', entry_price_calc)
+                signal_action = pos.get('signal_action', '') or ''
+                signal_confidence = pos.get('signal_confidence', 0) or 0
+                went_underwater_at = pos.get('went_underwater_at')
+                underwater_minutes = pos.get('underwater_minutes_total', 0) or 0
+                if went_underwater_at and current_price < entry_price_calc:
+                    try:
+                        underwater_dt = datetime.fromisoformat(str(went_underwater_at).replace('Z', '+00:00'))
+                        if underwater_dt.tzinfo is None:
+                            underwater_dt = underwater_dt.replace(tzinfo=ZoneInfo('UTC'))
+                        underwater_minutes += max(0, int((datetime.now(underwater_dt.tzinfo) - underwater_dt).total_seconds() / 60))
+                    except (TypeError, ValueError):
+                        pass
+                peak_giveback_pct = ((peak_price - current_price) / peak_price * 100) if peak_price > 0 else 0
                 stop_info = calculate_trailing_stop(
                     current_price=current_price,
                     entry_price=entry_price_calc,
@@ -983,6 +1059,7 @@ async def get_open_positions():
                     activation_buffer=settings.TRAILING_ACTIVATION_BUFFER,
                     min_locked_profit=settings.MIN_LOCKED_PROFIT_FOR_SELL,
                 )
+                break_even_gap_pct = ((current_price - stop_info['break_even']) / stop_info['break_even'] * 100) if stop_info['break_even'] > 0 else 0
 
                 rows.append({
                     'product_id': product_id,
@@ -1003,6 +1080,14 @@ async def get_open_positions():
                     'position_id': pos.get('position_id'),
                     'opened_at': pos.get('opened_at'),
                     'status': pos.get('status', 'open'),
+                    'entry_reason': pos.get('entry_reason', '') or '',
+                    'signal_action': signal_action,
+                    'signal_confidence': round(signal_confidence * 100, 1) if signal_confidence <= 1 else round(signal_confidence, 1),
+                    'went_underwater_at': went_underwater_at,
+                    'underwater_minutes': underwater_minutes if current_price < entry_price_calc else 0,
+                    'underwater_max_drawdown_pct': round((pos.get('underwater_max_drawdown', 0) or 0) * 100, 2),
+                    'peak_giveback_pct': round(peak_giveback_pct, 2),
+                    'break_even_gap_pct': round(break_even_gap_pct, 2),
                     # Trailing stop info
                     'break_even': round(stop_info['break_even'], 2),
                     'unlock_price': round(stop_info['activation_threshold'], 2),

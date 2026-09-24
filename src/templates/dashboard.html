@@ -252,7 +252,7 @@
                         <li><strong>Confidence:</strong> &ge; <span id="threshold-display">65</span>% probability threshold</li>
                         <li><strong>Position Size:</strong> Max <span id="max-pos-display">0.5</span>% of portfolio</li>
                         <li><strong>Check Interval:</strong> Every <span id="interval-display">45</span> minutes</li>
-                        <li><strong>Risk:</strong> Max 0.5% per trade, &pound;2 buffer maintained</li>
+                        <li><strong>Entry gate:</strong> BUYs wait for a <span id="entry-gate-display">confirmed ATR-scaled trough rebound</span></li>
                     </ul>
                 </div>
             </div>
@@ -550,8 +550,16 @@
                 const bdg = sig === 'BUY' ? 'success' : sig === 'SELL' ? 'danger' : 'secondary';
                 const conf = (info.confidence !== undefined && info.confidence !== null) ? Math.round(info.confidence) : 0;
                 const isTrade = sig === 'BUY' || sig === 'SELL';
-                const meets = isTrade && conf >= 60;
+                const meets = info.meets_threshold === true;
                 const bal = info.crypto_balance;
+                const gate = info.entry_gate || {};
+                const gateBadge = info.signal === 'BUY' && gate.enabled
+                    ? `<span class="badge bg-${gate.confirmed ? 'success' : 'warning'}">${gate.confirmed ? 'TROUGH CONFIRMED' : 'ENTRY WAIT'}</span>`
+                    : '';
+                const gateDetail = info.signal === 'BUY' && gate.enabled
+                    ? `<div class="small ${gate.confirmed ? 'text-success' : 'text-warning'}"><i class="fas fa-mountain me-1"></i>${gate.reason || 'unknown'}${gate.candidate_low ? ` | Low £${Number(gate.candidate_low).toLocaleString()} | Level £${Number(gate.confirmation_level).toLocaleString()}` : ''}</div>`
+                    : '';
+                const age = info.signal_age_seconds != null ? `${Math.floor(info.signal_age_seconds / 60)}m old` : 'age unknown';
                 const balDisplay = bal ? `<small class="text-muted">Hold:</small> ${bal.balance?.toFixed(6)} <small class="text-muted">£${bal.value?.toFixed(2)}</small>` : '<small class="text-muted">No holding</small>';
 
                 grid.innerHTML += `
@@ -567,8 +575,10 @@
                             <div class="progress mb-1" style="height:8px;">
                                 <div class="progress-bar bg-${bdg}" style="width:${conf}%"></div>
                             </div>
-                            <small class="text-muted">${conf}% Conf | ${info.agreement || 0}% Agmt</small>
+                            <small class="text-muted">${conf}% Adjusted | ${Math.round(info.raw_confidence ?? conf)}% Raw | ${info.agreement || 0}% Agmt | ${age}</small>
+                            ${gateBadge}
                             ${info.threshold_reason ? '<small class="text-success d-block">' + info.threshold_reason + '</small>' : ''}
+                            ${gateDetail}
                             <div class="mt-2 small">${balDisplay}</div>
                             <div class="small text-muted"><i class="fas fa-chart-line me-1"></i>${info.regime || 'neutral'}</div>
                         </div>
@@ -602,14 +612,14 @@
                 <!-- Trailing Stop Details Row -->
                 <tr class="trailing-stop-row">
                     <td>↳ ${p.product_id}</td>
-                    <td colspan="4">BE: £${p.break_even?.toLocaleString()} | <strong>Stop: £${p.trailing_stop?.toLocaleString()}</strong></td>
-                    <td>Peak: £${p.peak_price?.toLocaleString()}</td>
+                    <td colspan="4">BE: £${p.break_even?.toLocaleString()} | <strong>Stop: £${p.trailing_stop?.toLocaleString()}</strong><br><small class="text-muted">BE gap: ${p.break_even_gap_pct >= 0 ? '+' : ''}${p.break_even_gap_pct?.toFixed(2)}% | Giveback: ${p.peak_giveback_pct?.toFixed(2)}%</small></td>
+                    <td>Peak: £${p.peak_price?.toLocaleString()}<br><small class="text-muted">Signal: ${p.signal_action || '-'} ${p.signal_confidence ? p.signal_confidence.toFixed(1) + '%' : ''}</small></td>
                     <td>ATR: ${p.atr_available ? '£' + p.atr?.toLocaleString() + ' (' + p.atr_pct?.toFixed(3) + '%)' : '-'}</td>
                     <td>ATR stop: ${p.atr_based_stop_pct != null ? p.atr_based_stop_pct.toFixed(3) + '%' : '-'}</td>
                     <td>Trail: ${p.trailing_pct?.toFixed(3)}% | Gap: ${p.stop_distance != null ? '£' + p.stop_distance.toFixed(2) + ' (' + p.stop_distance_pct.toFixed(2) + '%)' : '-'}</td>
                     <td><span class="badge bg-${p.trailing_activated ? 'success' : 'secondary'}">${p.stop_note || (p.trailing_activated ? 'Active' : 'Pending')}</span></td>
                     <td><span class="badge bg-info">${p.regime || 'neutral'}</span></td>
-                    <td colspan="2"></td>
+                    <td colspan="2"><small class="text-muted">${p.underwater_minutes ? `Underwater: ${Math.floor(p.underwater_minutes / 60)}h ${p.underwater_minutes % 60}m | Max DD: ${p.underwater_max_drawdown_pct?.toFixed(2)}%` : (p.entry_reason || '')}</small></td>
                 </tr>`).join('');
         }
 
