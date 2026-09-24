@@ -594,7 +594,7 @@
                             <div class="progress mb-1" style="height:8px;">
                                 <div class="progress-bar bg-${bdg}" style="width:${conf}%"></div>
                             </div>
-                            <small class="text-muted">${conf}% Adjusted | ${Math.round(info.raw_confidence ?? conf)}% Raw | ${info.agreement || 0}% Agmt | ${age}</small>
+                            <small class="text-muted">${signal === 'HOLD' ? 'HOLD consensus' : `${conf}% Adjusted`} | ${signal === 'HOLD' ? '' : `${Math.round(info.raw_confidence ?? conf)}% Raw | `}${info.agreement || 0}% Agmt | ${age}</small>
                             ${gateBadge}
                             ${info.threshold_reason ? '<small class="text-success d-block">' + info.threshold_reason + '</small>' : ''}
                             ${gateDetail}

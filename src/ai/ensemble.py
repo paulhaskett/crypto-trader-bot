@@ -113,6 +113,11 @@ class EnsemblePredictor:
         confidence = self._calculate_confidence(
             majority_vote, vote_list, probas, agreement
         )
+        # Agreement with HOLD is not actionable BUY/SELL confidence. Keeping
+        # agreement separate prevents a unanimous HOLD from being displayed
+        # or logged as "100% confidence".
+        if majority_vote == CLASS_HOLD:
+            confidence = 0.0
         
         # Phase 3: Pass agreement info for enhanced confidence scoring
         action = self._get_action(majority_vote, confidence, agreement, n_models)
