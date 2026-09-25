@@ -1332,7 +1332,7 @@ class DatabaseManager:
                             'scale_out_levels_triggered': pos.scale_out_levels_triggered or "",
                             'last_scale_out_price': pos.last_scale_out_price or 0.0,
                             'last_scale_out_time': pos.last_scale_out_time,
-                            'remaining_size': pos.remaining_size if pos.remaining_size and pos.remaining_size > 0 else pos.size
+                            'remaining_size': pos.remaining_size if pos.remaining_size is not None else pos.size
                         }
                 else:
                     position_by_product[pos.product_id] = {
@@ -1361,7 +1361,7 @@ class DatabaseManager:
                         'scale_out_levels_triggered': pos.scale_out_levels_triggered or "",
                         'last_scale_out_price': pos.last_scale_out_price or 0.0,
                         'last_scale_out_time': pos.last_scale_out_time,
-                        'remaining_size': pos.remaining_size if pos.remaining_size and pos.remaining_size > 0 else pos.size
+                        'remaining_size': pos.remaining_size if pos.remaining_size is not None else pos.size
                     }
             
             # Remove the temporary datetime field before returning

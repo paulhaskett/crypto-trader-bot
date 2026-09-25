@@ -107,6 +107,9 @@ class TradingEngine:
         self.active_positions = {}
         self.last_trade_time = {}  # Initialize last trade time tracking
         self._positions_lock = threading.Lock()  # Thread safety for WS callbacks
+        # Position claims prevent the scheduled cycle and WebSocket callback
+        # from both submitting a sell before either can persist the close.
+        self._closing_positions = set()
         self._last_peak_sync = {}  # product_id -> timestamp, rate-limit DB peak updates
         
         # Load holdings from database
@@ -487,12 +490,17 @@ class TradingEngine:
             logger.info(f"SKIP: {product_id} - position already open")
             return False
         
+        open_positions = [
+            position for position in self.active_positions.values()
+            if position.get('status') == 'open'
+        ]
+
         # Check active positions
-        if len(self.active_positions) >= settings.MAX_CONCURRENT_POSITIONS:
+        if len(open_positions) >= settings.MAX_CONCURRENT_POSITIONS:
             return False
 
         # Check if product already has an open position
-        for position in self.active_positions.values():
+        for position in open_positions:
             if position['product_id'] == product_id:
                 return False
 
@@ -541,7 +549,16 @@ class TradingEngine:
                 logger.debug(f"Using fallback volatility for {product_id}: {volatility}")
 
             # Calculate stop loss
-            direction = 'long' if signal['prediction'] == 1 else 'short'
+            # The action is the authoritative execution semantic. In the
+            # three-class model BUY=2, HOLD=1, SELL=0; using prediction==1
+            # here inverted every BUY stop-loss/take-profit direction.
+            if action == 'BUY':
+                direction = 'long'
+            elif action == 'SELL':
+                direction = 'short'
+            else:
+                logger.info(f"Signal rejected: unsupported action {action} for {product_id}")
+                return False
             stop_loss_price = risk_manager.calculate_stop_loss(entry_price, direction, volatility)
             
             logger.debug(f"Signal validation: {product_id} | Entry: {entry_price:.6f} | Volatility: {volatility:.4f} | Direction: {direction} | Stop Loss: {stop_loss_price:.6f}")
@@ -690,6 +707,7 @@ class TradingEngine:
                     'side': side,
                     'size': executed_size,
                     'entry_price': executed_price,
+                    'weighted_entry_price': executed_price,
                     'remaining_size': executed_size,  # Set remaining size when opening position
                     'stop_loss_price': signal['stop_loss_price'],
                     'take_profit_prices': signal['take_profit_prices'],
@@ -962,6 +980,27 @@ class TradingEngine:
         """Simple test method."""
         return "test"
 
+    def _claim_position_close(self, position_id: str) -> bool:
+        """Claim a position for one exit path before doing slow I/O.
+
+        The cycle and WebSocket callback can observe the same stop at nearly
+        the same time. A short in-process claim closes that race; the database
+        close remains the durable verification step.
+        """
+        with self._positions_lock:
+            position = self.active_positions.get(position_id)
+            if not position or position.get('status') != 'open':
+                return False
+            if position_id in self._closing_positions:
+                return False
+            self._closing_positions.add(position_id)
+            return True
+
+    def _release_position_close(self, position_id: str) -> None:
+        """Release an unsuccessful exit claim so a later cycle can retry."""
+        with self._positions_lock:
+            self._closing_positions.discard(position_id)
+
     def monitor_positions(self) -> List[Dict[str, Any]]:
             """
             Monitor open positions and check for exit conditions.
@@ -977,14 +1016,17 @@ class TradingEngine:
             scale_in_candidates = []  # Collect candidates, execute only best
             scale_in_spent = 0.0  # Track GBP spent this cycle
 
+            # One quote snapshot is shared by every position in this cycle.
+            # Fetching it after the loop previously also left the empty-map
+            # path with an uninitialised variable.
+            current_prices = data_collector.get_current_prices()
+
             for position_id, position in list(self.active_positions.items()):
                 try:
                     if position['status'] != 'open':
                         continue
 
                     product_id = position['product_id']
-                    current_prices = data_collector.get_current_prices()
-
                     if product_id not in current_prices:
                         continue
 
@@ -1009,7 +1051,7 @@ class TradingEngine:
                         else:
                             entry_price = stored_entry_price
                     else:
-                        entry_price = stored_entry_price
+                        entry_price = position.get('weighted_entry_price') or stored_entry_price
                     
                     # Initialize should_close
                     should_close = False
@@ -1132,9 +1174,10 @@ class TradingEngine:
 
                             if signal_action == 'SELL':
                                 profit_pct = (current_price - entry_price) / entry_price
-                                # Only close if in profit (above break-even)
-                                min_profit_pct = 0.01  # 1% minimum profit
-                                if current_price >= break_even or profit_pct >= min_profit_pct:
+                                # The hard no-realised-loss policy applies to
+                                # every exit path. A 1% shortcut is below the
+                                # fee-inclusive break-even threshold.
+                                if current_price >= break_even:
                                     should_close = True
                                     exit_reason = f"AI SELL signal (confidence: {signal_confidence:.1%})"
                                     logger.info(f"[AI SELL] {product_id}: Signal={signal_action} confidence={signal_confidence:.1%}, profit={profit_pct:.2%}, closing position")
@@ -1270,6 +1313,10 @@ class TradingEngine:
                                     # Close position if conditions met
                     if should_close:
                         sell_size = position.get('remaining_size', position.get('size', 0))
+
+                        if not self._claim_position_close(position_id):
+                            logger.warning(f"[TRAILING STOP] Exit already in flight for {product_id}; skipping duplicate sell")
+                            continue
                         
                         # Calculate pnl for logging
                         pnl = (current_price - entry_price) * sell_size
@@ -1282,6 +1329,7 @@ class TradingEngine:
                         
                         # Actually execute the sell order on Coinbase (not just update record!)
                         close_confirmed = self.paper_trading
+                        verified_exit_price = current_price
                         if not self.paper_trading and sell_size > 0:
                             try:
                                 order_result = self.execute_live_trade(product_id, 'sell', sell_size)
@@ -1289,6 +1337,13 @@ class TradingEngine:
                                     pnl = float(order_result['realized_pnl'])
                                 close_confirmed = bool(order_result and order_result.get('success') is True)
                                 verified_sell_size = float((order_result or {}).get('size', 0.0))
+                                verified_exit_price = float((order_result or {}).get('price', current_price))
+                                if close_confirmed and verified_exit_price < break_even:
+                                    close_confirmed = False
+                                    logger.error(
+                                        f"[NO-LOSS GUARD] Verified fill £{verified_exit_price:.2f} "
+                                        f"is below break-even £{break_even:.2f}; reconciliation required"
+                                    )
                                 if close_confirmed and verified_sell_size + 1e-9 < sell_size:
                                     # A verified partial fill cannot close the
                                     # whole position. Leave it open for the
@@ -1304,16 +1359,18 @@ class TradingEngine:
                             except Exception as e:
                                 logger.error(f"[TRAILING STOP] Failed to execute sell: {e}")
                         if not close_confirmed:
+                            self._release_position_close(position_id)
                             logger.error(f"[TRAILING STOP] Keeping {product_id} open because sell was not verified")
                             continue
                         
                         # Update position record in DB only after a verified fill.
-                        self._close_position(position_id, pnl, exit_reason, current_price)
+                        if not self._close_position(position_id, pnl, exit_reason, verified_exit_price):
+                            continue
                         closed_positions.append({
                             'position_id': position_id,
                             'pnl': pnl,
                             'exit_reason': exit_reason,
-                            'exit_price': current_price,
+                            'exit_price': verified_exit_price,
                             'entry_price': entry_price,
                             'trailing_stop': trailing_stop
                         })
@@ -1364,43 +1421,42 @@ class TradingEngine:
 
             return closed_positions
 
-    def _close_position(self, position_id: str, pnl: float, reason: str, exit_price: float):
-            """
-            Close a position and update records.
+    def _close_position(self, position_id: str, pnl: float, reason: str, exit_price: float) -> bool:
+            """Close a position only after the durable DB transition succeeds."""
+            if position_id not in self.active_positions:
+                return False
 
-            Args:
-                position_id: Position identifier
-                pnl: Profit/loss amount
-                reason: Reason for closing
-                exit_price: Price at which position was closed
-            """
-            if position_id in self.active_positions:
-                position = self.active_positions[position_id]
-                product_id = position.get('product_id', '')
+            position = self.active_positions[position_id]
+            product_id = position.get('product_id', '')
+            if not db_manager.close_open_position(position_id, exit_price, pnl, reason, reason):
+                logger.error(
+                    f"Position close DB update failed for {product_id}; "
+                    "leaving in-memory/risk state open for reconciliation"
+                )
+                return False
 
-                # Update position record in memory
-                position['status'] = 'closed'
-                position['closed_at'] = datetime.now()
-                position['pnl'] = pnl
-                position['exit_reason'] = reason
-                position['exit_price'] = exit_price
+            position['status'] = 'closed'
+            position['closed_at'] = datetime.now()
+            position['pnl'] = pnl
+            position['exit_reason'] = reason
+            position['exit_price'] = exit_price
+            self._closing_positions.discard(position_id)
 
-                # Update database - actually close the position record
-                db_manager.close_open_position(position_id, exit_price, pnl, reason, reason)
+            risk_manager.close_position(position_id, pnl)
 
-                # Update risk manager
-                risk_manager.close_position(position_id, pnl)
+            if product_id in self.holdings:
+                self.holdings[product_id] = {
+                    'has_position': False,
+                    'entry_price': 0,
+                    'size': 0
+                }
+                logger.info(f"Holdings cleared for {product_id}")
 
-                # Update holdings to allow new positions
-                if product_id in self.holdings:
-                    self.holdings[product_id] = {
-                        'has_position': False,
-                        'entry_price': 0,
-                        'size': 0
-                    }
-                    logger.info(f"Holdings cleared for {product_id}")
-
-                logger.info(f"Position closed: {product_id} | P&L: £{pnl:.2f} | Reason: {reason}")
+            # Closed rows must not consume the active-position limit or block
+            # re-entry for the product.
+            self.active_positions.pop(position_id, None)
+            logger.info(f"Position closed: {product_id} | P&L: £{pnl:.2f} | Reason: {reason}")
+            return True
 
     def get_status(self) -> Dict[str, Any]:
             """
@@ -1582,8 +1638,13 @@ class TradingEngine:
                         )
                         return
 
+                    if not self._claim_position_close(pos_id):
+                        logger.warning(f"[WS TRAILING STOP] Exit already in flight for {product_id}; skipping duplicate sell")
+                        return
+
                     # Execute the sell immediately
                     pnl = (trigger_price - entry_price) * sell_size
+                    verified_exit_price = trigger_price
                     logger.warning(
                         f"[WS TRAILING STOP] TRIGGERED: {product_id} "
                         f"trigger=£{trigger_price:.2f} <= stop=£{trailing_stop:.2f} "
@@ -1593,17 +1654,36 @@ class TradingEngine:
                     if not self.paper_trading:
                         try:
                             order_result = self.execute_live_trade(product_id, 'sell', sell_size)
-                            if order_result and order_result.get('realized_pnl') is not None:
-                                pnl = float(order_result['realized_pnl'])
-                            logger.info(f"[WS TRAILING STOP] Sell order result: {order_result}")
                             if not order_result or order_result.get('success') is not True:
+                                self._release_position_close(pos_id)
                                 logger.error(f"[WS TRAILING STOP] Keeping {product_id} open because sell was not verified")
                                 return
+                            if order_result and order_result.get('realized_pnl') is not None:
+                                pnl = float(order_result['realized_pnl'])
+                            verified_exit_price = float(order_result.get('price', trigger_price))
+                            if verified_exit_price < break_even:
+                                self._release_position_close(pos_id)
+                                logger.error(
+                                    f"[WS NO-LOSS GUARD] Verified fill £{verified_exit_price:.2f} "
+                                    f"is below break-even £{break_even:.2f}; reconciliation required"
+                                )
+                                return
+                            logger.info(f"[WS TRAILING STOP] Sell order result: {order_result}")
+                            verified_sell_size = float(order_result.get('size', 0.0))
+                            if verified_sell_size + 1e-9 < sell_size:
+                                self._release_position_close(pos_id)
+                                logger.error(
+                                    f"[WS TRAILING STOP] Partial sell only: filled={verified_sell_size:.8f}, "
+                                    f"requested={sell_size:.8f}; position remains open"
+                                )
+                                return
                         except Exception as e:
+                            self._release_position_close(pos_id)
                             logger.error(f"[WS TRAILING STOP] Failed to execute sell: {e}")
                             return
 
-                    self._close_position(pos_id, pnl, "Trailing stop hit (real-time)", trigger_price)
+                    if not self._close_position(pos_id, pnl, "Trailing stop hit (real-time)", verified_exit_price):
+                        return
 
                     # Clear holdings
                     if product_id in self.holdings:
