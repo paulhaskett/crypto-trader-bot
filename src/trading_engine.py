@@ -858,26 +858,29 @@ class TradingEngine:
     def execute_live_trade(self, product_id: str, side: str, size: float):
         """Execute a live trading order."""
         try:
-            # Dust fix: on SELL, sell the ACTUAL available wallet balance, not the
-            # DB's bookkeeping remaining_size. Position sizing computes full-precision
-            # floats (e.g. 0.19550129557363768) but orders round to the product's
-            # base_increment (0.001 for SOL-GBP), so two rounded-up buys (0.196 + 0.196)
-            # land 0.392 in the wallet while the DB still says 0.39100259114727537, and
-            # the rounded-down sell of that leaves 0.001 SOL stranded as dust. Reading the
-            # real balance guarantees the close sells everything, zero dust left behind.
+            # Never replace the position size with the entire wallet balance:
+            # wallet inventory may include manual or other-strategy holdings.
+            # Cap the requested sell to available inventory, while preserving
+            # position ownership boundaries.
             if side == 'sell':
                 base_currency = product_id.split('-')[0]
                 try:
                     actual_balance = coinbase_api.get_account_balance(base_currency)
+                    if not coinbase_api.last_accounts_fetch_ok:
+                        return {
+                            'success': False,
+                            'error': f'Cannot verify {base_currency} wallet balance before sell'
+                        }
                     if actual_balance > 0:
-                        logger.info(
-                            f"[DUST-FIX] Selling actual wallet balance {actual_balance:.8f} "
-                            f"{base_currency} (DB remaining_size was {size:.8f})"
-                        )
-                        size = actual_balance
+                        if actual_balance < size:
+                            logger.warning(
+                                f"[SELL-SIZE] Wallet has only {actual_balance:.8f} {base_currency}; "
+                                f"capping position sell from {size:.8f}"
+                            )
+                        size = min(size, actual_balance)
                 except Exception as e:
                     logger.warning(
-                        f"[DUST-FIX] Could not read {base_currency} balance, "
+                        f"[SELL-SIZE] Could not read {base_currency} balance, "
                         f"falling back to DB size: {e}"
                     )
 
