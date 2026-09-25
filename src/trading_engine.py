@@ -19,6 +19,7 @@ import threading
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import uuid
+import re
 
 from config.settings import settings
 from src.ai_model import ai_model
@@ -146,6 +147,39 @@ class TradingEngine:
 
         # Pre-load existing DB positions so we can close phantom entries
         existing_positions = db_manager.load_open_positions(trade_type='live') or {}
+        pending_positions = db_manager.load_pending_positions(trade_type='live')
+        for pending in pending_positions:
+            match = re.match(r"pending:([^:]+):order:(.+)", pending.get('exit_reason', ''))
+            if not match:
+                raise RuntimeError(f"Pending position {pending['position_id'][:8]}... has no Coinbase order ID")
+            claim_id, order_id = match.groups()
+            order = coinbase_api.get_order(order_id)
+            if not order:
+                raise RuntimeError(f"Could not reconcile pending Coinbase order {order_id}")
+            if order.get('success') is True:
+                filled_size = float(order.get('size', 0.0))
+                remaining_size = float(pending.get('remaining_size') or pending.get('size') or 0.0)
+                if filled_size + 1e-9 < remaining_size:
+                    raise RuntimeError(f"Partial pending fill {order_id}; manual reconciliation required")
+                pnl = db_manager.calculate_realized_pnl(
+                    pending['product_id'], filled_size,
+                    float(order.get('price', 0.0)), float(order.get('fees', 0.0))
+                )
+                if pnl is None:
+                    raise RuntimeError(f"Pending fill {order_id} has incomplete cost basis")
+                if not db_manager.close_open_position(
+                    pending['position_id'], float(order['price']), float(pnl),
+                    'recovered_pending_sell', f"recovered_pending_sell:{order_id}"
+                ):
+                    raise RuntimeError(f"Could not persist recovery for pending order {order_id}")
+                logger.warning(f"Recovered filled pending sell {order_id} for {pending['product_id']}")
+            elif order.get('status') in {'CANCELLED', 'FAILED', 'EXPIRED'}:
+                if not db_manager.release_pending_position(pending['position_id'], claim_id):
+                    raise RuntimeError(f"Could not release cancelled pending order {order_id}")
+                logger.warning(f"Released unfilled pending sell {order_id}")
+            else:
+                raise RuntimeError(f"Pending Coinbase order {order_id} remains unresolved: {order.get('status')}")
+
         pending_positions = db_manager.load_pending_positions(trade_type='live')
         if pending_positions:
             pending_ids = ', '.join(p['position_id'][:8] for p in pending_positions)
@@ -883,6 +917,10 @@ class TradingEngine:
                 logger.info(f"Live order executed: {order_result}")
                 return order_result
 
+            # Preserve an unverified order ID for restart reconciliation, but
+            # never write it as a filled trade.
+            return order_result
+
         except Exception as e:
             logger.error(f"Live order execution failed: {e}")
             return {'success': False, 'error': str(e)}
@@ -1351,6 +1389,9 @@ class TradingEngine:
                         if not self.paper_trading and sell_size > 0:
                             try:
                                 order_result = self.execute_live_trade(product_id, 'sell', sell_size)
+                                claim_id = self._closing_positions.get(position_id)
+                                if claim_id and order_result and order_result.get('order_id'):
+                                    db_manager.set_pending_order_id(position_id, claim_id, order_result['order_id'])
                                 if order_result and order_result.get('realized_pnl') is not None:
                                     pnl = float(order_result['realized_pnl'])
                                 close_confirmed = bool(order_result and order_result.get('success') is True)
@@ -1672,6 +1713,9 @@ class TradingEngine:
                     if not self.paper_trading:
                         try:
                             order_result = self.execute_live_trade(product_id, 'sell', sell_size)
+                            claim_id = self._closing_positions.get(pos_id)
+                            if claim_id and order_result and order_result.get('order_id'):
+                                db_manager.set_pending_order_id(pos_id, claim_id, order_result['order_id'])
                             if not order_result or order_result.get('success') is not True:
                                 self._release_position_close(pos_id)
                                 logger.error(f"[WS TRAILING STOP] Keeping {product_id} open because sell was not verified")

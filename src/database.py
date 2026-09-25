@@ -1601,6 +1601,26 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def set_pending_order_id(self, position_id: str, claim_id: str, order_id: str) -> bool:
+        """Persist the Coinbase order ID while an exit is in flight."""
+        session = self.get_session()
+        try:
+            changed = session.query(OpenPosition).filter(
+                OpenPosition.position_id == position_id,
+                OpenPosition.status == 'sell_pending',
+                OpenPosition.exit_reason.like(f"pending:{claim_id}:%")
+            ).update({
+                OpenPosition.exit_reason: f"pending:{claim_id}:order:{order_id}"[:100]
+            }, synchronize_session=False)
+            session.commit()
+            return changed == 1
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to persist pending order {position_id[:8]}...: {e}")
+            return False
+        finally:
+            session.close()
+
     def get_closed_positions(self, limit: int = 20) -> List[Dict]:
         """Get closed positions with P&L information."""
         session = self.get_session()
