@@ -1885,8 +1885,31 @@ async def close_position(position_id: str):
             return {"status": "error", "message": f"Could not get price for {product_id}"}
 
         exit_price = float(current_price['price'])
-        size = position.get('size', position.get('remaining_size', 0))
+        size = float(position.get('remaining_size') or position.get('size') or 0)
         entry_price = position['entry_price']
+        if size <= 0:
+            return {"status": "error", "message": "Position has no sellable residual size"}
+
+        # Manual close must execute and verify the Coinbase sell before the
+        # database row is closed. Previously this endpoint only changed the
+        # local record, leaving wallet inventory and the dashboard divergent.
+        from src.database import db_manager as _db
+        if not _db.get_paper_trading():
+            break_even = float(entry_price) * (1.0 + settings.MAKER_FEE_RATE + settings.TAKER_FEE_RATE)
+            if exit_price < break_even:
+                return {
+                    "status": "error",
+                    "message": f"Manual close blocked below break-even (£{break_even:.2f})"
+                }
+            order_result = coinbase_api.place_market_order(product_id, 'sell', size)
+            if not order_result or order_result.get('success') is not True:
+                return {"status": "error", "message": "Coinbase sell was not verified"}
+            filled_size = float(order_result.get('size', 0.0))
+            if filled_size + 1e-9 < size:
+                return {"status": "error", "message": "Partial Coinbase fill; position left open for reconciliation"}
+            exit_price = float(order_result.get('price') or exit_price)
+            if exit_price < break_even:
+                return {"status": "error", "message": "Verified fill was below break-even; reconciliation required"}
         pnl = (exit_price - entry_price) * size
 
         result = db_manager.close_open_position(position_id, exit_price, pnl, "manual_close", "manual")
