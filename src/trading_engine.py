@@ -1659,9 +1659,11 @@ class TradingEngine:
                     consensus_result = pricer.get_consensus_price(product_id, use_cache=True)
                     trigger_price = consensus_result.price
                 except Exception as e:
-                    # Fall back to the raw WebSocket price if consensus unavailable
-                    logger.debug(f"[WS TRAILING STOP] consensus unavailable for {product_id}: {e}, using raw tick")
-                    trigger_price = current_price
+                    # A raw Coinbase tick is not equivalent to the cycle's
+                    # consensus snapshot. Fail closed rather than letting the
+                    # WebSocket path use different exit economics.
+                    logger.warning(f"[WS TRAILING STOP] consensus unavailable for {product_id}: {e}; skipping tick")
+                    return
 
                 fees = db_manager.get_fee_rates()
                 if not fees:
@@ -1672,7 +1674,28 @@ class TradingEngine:
                 break_even = entry_price * (1 + total_fee)
 
                 regime = position.get('regime', 'neutral')
-                trailing_pct = settings.TRAILING_STOP_REGIME_MAP.get(regime, settings.TRAILING_STOP_PERCENT)
+                current_atr = None
+                hist_df = None
+                try:
+                    hist_df = data_collector.collect_historical_data(product_id, days=7)
+                    if hist_df is not None and not hist_df.empty and {'high', 'low', 'close'}.issubset(hist_df.columns):
+                        atr_series = calculate_atr(hist_df, period=settings.ATR_PERIOD)
+                        if len(atr_series) > 0:
+                            current_atr = float(atr_series.iloc[-1])
+                except Exception as e:
+                    logger.debug(f"[WS TRAILING STOP] ATR unavailable for {product_id}: {e}")
+
+                stop_info = calculate_trailing_stop(
+                    current_price=trigger_price, entry_price=entry_price,
+                    peak_price=peak_price, regime=regime, atr=current_atr,
+                    fixed_stop=settings.TRAILING_STOP_PERCENT,
+                    regime_stops=settings.TRAILING_STOP_REGIME_MAP,
+                    atr_multiplier=2.5, max_stop=0.05,
+                    maker_fee=maker_fee, taker_fee=taker_fee,
+                    activation_buffer=settings.TRAILING_ACTIVATION_BUFFER,
+                    min_locked_profit=settings.MIN_LOCKED_PROFIT_FOR_SELL,
+                )
+                trailing_pct = stop_info['trailing_pct']
 
                 activation_threshold = break_even * (1 + settings.TRAILING_ACTIVATION_BUFFER)
                 trailing_activated = peak_price >= activation_threshold
@@ -1688,7 +1711,27 @@ class TradingEngine:
                 min_trail_stop = entry_price * (1 + settings.MIN_LOCKED_PROFIT_FOR_SELL)
                 trailing_stop = max(trailing_stop, min_trail_stop)
 
-                if trigger_price <= trailing_stop and trailing_activated:
+                skip_trailing = False
+                if hist_df is not None and not hist_df.empty and len(hist_df) >= 50:
+                    try:
+                        delta = hist_df['close'].diff()
+                        gain = delta.where(delta > 0, 0.0)
+                        loss = (-delta).where(delta < 0, 0.0)
+                        avg_gain = gain.rolling(14, min_periods=14).mean()
+                        avg_loss = loss.rolling(14, min_periods=14).mean()
+                        rsi = 100 - (100 / (1 + avg_gain / avg_loss.replace(0, 0.0001)))
+                        current_rsi = float(rsi.iloc[-1])
+                        ma20 = hist_df['close'].rolling(20).mean().iloc[-1]
+                        ma50 = hist_df['close'].rolling(50).mean().iloc[-1]
+                        if current_rsi > 70 and trigger_price > ma20 and trigger_price > ma50:
+                            skip_trailing = True
+                            logger.info(f"[WS MOMENTUM PROTECT] {product_id}: RSI={current_rsi:.1f}, above MA20/MA50")
+                        elif (peak_price - trigger_price) / peak_price < 0.01:
+                            skip_trailing = True
+                    except Exception as e:
+                        logger.debug(f"[WS MOMENTUM CHECK] {product_id}: {e}")
+
+                if not skip_trailing and trigger_price <= trailing_stop and trailing_activated:
                     # v2.9.2: Never sell below break-even - the peak may be stale
                     if trigger_price < break_even:
                         logger.info(
