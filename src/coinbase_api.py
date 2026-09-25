@@ -72,7 +72,7 @@ class CoinbaseAPI:
                     timeout=60  # 60 second timeout for all requests
                 )
                 logger.info("Coinbase Advanced SDK client initialized successfully with 60s timeout")
-                logger.info(f"API Key: {self.advanced_api_key[:50]}...")
+                logger.info("Coinbase Advanced SDK client initialized (credential configured)")
             except Exception as e:
                 logger.error(f"Failed to initialize SDK client: {e}")
                 logger.error(f"SDK_AVAILABLE: {SDK_AVAILABLE}")
@@ -672,12 +672,16 @@ class CoinbaseAPI:
 
             if response and 'id' in response:
                 logger.info(f"Legacy API order placed: {response['id']}")
+                # The legacy placement response does not prove settlement.
+                # Fail closed rather than creating a zero-price filled trade;
+                # wallet/order reconciliation can resolve the order later.
                 return {
-                    'success': True,
+                    'success': False,
+                    'error': 'Legacy order placed but fill is unverified',
                     'order_id': response['id'],
                     'size': size,
                     'price': 0.0,
-                    'mode': 'live'
+                    'mode': 'legacy_unverified'
                 }
             elif response and 'message' in response:
                 logger.error(f"Legacy API error: {response['message']}")
@@ -833,6 +837,54 @@ class CoinbaseAPI:
             logger.error(f"Error placing market order: {e}")
             return None
     
+    @staticmethod
+    def _normalise_order_fill(order_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalise Coinbase order response variants into verified fill data.
+
+        Coinbase has returned both the current Advanced Trade fields
+        (``filled_size``, ``filled_value``, ``average_filled_price``) and older
+        SDK-shaped fields (``filled_base_volume``, ``total_value``). A market
+        order is only considered verified when both filled size and price are
+        authoritative and positive; callers must never infer a fill from the
+        requested size or a live market price.
+        """
+        order_info = order_info or {}
+        order_id = order_info.get('order_id')
+        status = str(order_info.get('status', '')).upper()
+
+        def number(value: Any) -> float:
+            if isinstance(value, dict):
+                value = value.get('value', 0)
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        size = number(order_info.get('filled_size'))
+        if size <= 0:
+            size = number(order_info.get('filled_base_volume'))
+
+        price = number(order_info.get('average_filled_price'))
+        if price <= 0:
+            filled_value = number(order_info.get('filled_value'))
+            if filled_value <= 0:
+                filled_value = number(order_info.get('total_value'))
+            if size > 0 and filled_value > 0:
+                price = filled_value / size
+
+        fees = number(order_info.get('total_fees'))
+        if fees <= 0:
+            fees = number(order_info.get('fee'))
+
+        return {
+            'success': status == 'FILLED' and size > 0 and price > 0,
+            'order_id': order_id,
+            'status': status,
+            'size': size,
+            'price': price,
+            'fees': fees,
+        }
+
     def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
         """
         Get order details.
@@ -1116,46 +1168,33 @@ class CoinbaseAPI:
                             }
 
                         # Fetch order details to get actual filled price, status and fees.
-                        filled_price = 0.0
-                        total_fees = 0.0
-                        order_status = ''
+                        fill_result = {'success': False, 'order_id': order_id, 'status': ''}
                         try:
                             order_details = self.get_order(order_id)
                             if order_details and 'order' in order_details:
-                                order_info = order_details['order']
-                                order_status = str(order_info.get('status', '')).upper()
-                                total_value = float(order_info.get('total_value', {}).get('value', 0))
-                                base_size = float(order_info.get('filled_base_volume', 0))
-                                if base_size > 0:
-                                    filled_price = total_value / base_size
-                                total_fees = float(order_info.get('total_fees', 0))
+                                fill_result = self._normalise_order_fill(order_details['order'])
                         except Exception as e:
                             logger.warning(f"[DEBUG] Could not fetch order details: {e}")
 
                         # OPEN is not a failure, but it must settle before the
                         # engine records a position. Never place a duplicate retry.
-                        if order_status == 'OPEN':
+                        if fill_result.get('status') == 'OPEN':
                             time.sleep(2)
                             try:
                                 order_details = self.get_order(order_id)
                                 order_info = (order_details or {}).get('order', {})
-                                order_status = str(order_info.get('status', '')).upper()
-                                total_value = float(order_info.get('total_value', {}).get('value', 0))
-                                base_size = float(order_info.get('filled_base_volume', 0))
-                                if base_size > 0:
-                                    filled_price = total_value / base_size
-                                total_fees = float(order_info.get('total_fees', 0))
+                                fill_result = self._normalise_order_fill(order_info)
                             except Exception as e:
                                 logger.warning(f"[DEBUG] Could not recheck OPEN order: {e}")
 
-                        if order_status == 'CANCELLED':
+                        if fill_result.get('status') == 'CANCELLED':
                             return {
                                 'success': False,
                                 'error': 'Coinbase order cancelled',
                                 'order_id': order_id,
                                 'mode': 'live_sdk_failed',
                             }
-                        if filled_price <= 0:
+                        if not fill_result.get('success'):
                             logger.error(f"[DEBUG] Order {order_id} has no verified fill; refusing market-price fallback")
                             return {
                                 'success': False,
@@ -1167,9 +1206,9 @@ class CoinbaseAPI:
                         sdk_result = {
                             'success': True,
                             'order_id': order_id,
-                            'size': base_size if base_size > 0 else size,
-                            'price': filled_price,
-                            'fees': total_fees,
+                            'size': fill_result['size'],
+                            'price': fill_result['price'],
+                            'fees': fill_result['fees'],
                             'mode': 'live_sdk',
                             'response_time': round(time.time() - order_start_time, 2)
                         }
@@ -1252,29 +1291,35 @@ class CoinbaseAPI:
             logger.info(f"[DEBUG] REST response: {response}")
             
             if response and 'order_id' in response:
-                # Extract order details from response
-                rest_result = {
-                    'success': True,
-                    'order_id': response['order_id'],
-                    'size': size,
-                    'price': 0.0,  # Market orders don't have predetermined price
-                    'mode': 'live_rest',
-                    'response_time': round(time.time() - order_start_time, 2)
+                order_id = response['order_id']
+                try:
+                    order_details = self.get_order(order_id)
+                    fill_result = self._normalise_order_fill(
+                        (order_details or {}).get('order', {})
+                    )
+                except Exception as e:
+                    logger.warning(f"[DEBUG] Could not verify REST order {order_id}: {e}")
+                    fill_result = {'success': False, 'status': '', 'size': 0.0, 'price': 0.0, 'fees': 0.0}
+
+                if fill_result.get('success'):
+                    rest_result = {
+                        'success': True,
+                        'order_id': order_id,
+                        'size': fill_result['size'],
+                        'price': fill_result['price'],
+                        'fees': fill_result['fees'],
+                        'mode': 'live_rest',
+                        'response_time': round(time.time() - order_start_time, 2)
+                    }
+                    logger.info(f"[DEBUG] REST order SUCCESS: {rest_result}")
+                    return rest_result
+
+                return {
+                    'success': False,
+                    'error': 'REST order placed but fill is unverified',
+                    'order_id': order_id,
+                    'mode': 'live_rest_unverified'
                 }
-
-                # Try to get actual execution price if available
-                if 'order_configuration' in response:
-                    config = response['order_configuration']
-                    if 'market_market_ioc' in config:
-                        market_info = config['market_market_ioc']
-                        if 'quote_size' in market_info:
-                            try:
-                                rest_result['price'] = float(market_info['quote_size']) / size
-                            except Exception as e:
-                                logger.warning(f"[DEBUG] Could not calculate execution price: {e}")
-
-                logger.info(f"[DEBUG] REST order SUCCESS: {rest_result}")
-                return rest_result
             elif response and 'error' in response:
                 error_msg = response.get('message', 'Unknown error')
                 error_response = {

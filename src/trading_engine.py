@@ -640,6 +640,15 @@ class TradingEngine:
             if order_result and order_result.get('success', False):
                 # Record the position
                 position_id = str(uuid.uuid4())
+                # Coinbase increments and market movement can change the
+                # executed values from the requested signal values. Persist
+                # the authoritative fill so future sells use wallet-aligned
+                # quantity and accurate cost basis.
+                executed_size = float(order_result.get('size', size))
+                executed_price = float(order_result.get('price', entry_price))
+                if executed_size <= 0 or executed_price <= 0:
+                    logger.error(f"Refusing position creation from invalid fill: {order_result}")
+                    return None
                 
                 # Get regime from signal for trailing stop
                 regime = signal.get('regime', 'neutral')
@@ -659,9 +668,9 @@ class TradingEngine:
                     'position_id': position_id,
                     'product_id': product_id,
                     'side': side,
-                    'size': size,
-                    'entry_price': entry_price,
-                    'weighted_entry_price': entry_price,  # Initialize with entry price
+                    'size': executed_size,
+                    'entry_price': executed_price,
+                    'weighted_entry_price': executed_price,  # Initialize with entry price
                     'stop_loss_price': signal['stop_loss_price'],
                     'take_profit_prices': signal['take_profit_prices'],
                     'regime': regime,
@@ -669,8 +678,8 @@ class TradingEngine:
                     'opened_at': datetime.now(),
                     'status': 'open',
                     'scale_in_count': 0,  # Initialize scale-in tracking
-                    'remaining_size': size,  # Initialize remaining size to full size
-                    'peak_price': entry_price,  # NEW: Initialize peak price to entry price
+                    'remaining_size': executed_size,  # Initialize remaining size to full size
+                    'peak_price': executed_price,  # Initialize peak price to entry price
                     'entry_reason': entry_reason  # NEW: Track why position was opened
                 }
                 
@@ -679,17 +688,17 @@ class TradingEngine:
                     'position_id': position_id,
                     'product_id': product_id,
                     'side': side,
-                    'size': size,
-                    'entry_price': entry_price,
-                    'remaining_size': size,  # Set remaining size when opening position
+                    'size': executed_size,
+                    'entry_price': executed_price,
+                    'remaining_size': executed_size,  # Set remaining size when opening position
                     'stop_loss_price': signal['stop_loss_price'],
                     'take_profit_prices': signal['take_profit_prices'],
                     'regime': regime,
                     'opened_at': datetime.now(),
                     'status': 'open',
                     'trade_type': 'paper' if self.paper_trading else 'live',
-                    'current_price': entry_price,  # NEW: Save current price when opening
-                    'peak_price': entry_price,  # NEW: Save peak price to database
+                    'current_price': executed_price,  # Save actual fill price
+                    'peak_price': executed_price,  # Save actual fill price
                     'entry_reason': entry_reason  # NEW: Track why position was opened
                 })
                 
@@ -704,14 +713,14 @@ class TradingEngine:
                 # Update holdings to track open position
                 self.holdings[product_id] = {
                     'has_position': True,
-                    'entry_price': entry_price,
-                    'size': size
+                    'entry_price': executed_price,
+                    'size': executed_size
                 }
                 
                 # Add to risk manager
                 risk_manager.add_open_position(position_id, position_details)
                 
-                logger.info(f"Position opened: {position_id} ({side} {size:.6f} {product_id})")
+                logger.info(f"Position opened: {position_id} ({side} {executed_size:.6f} {product_id} @ £{executed_price:.2f})")
                 return order_result
 
             else:
@@ -805,8 +814,10 @@ class TradingEngine:
 
             logger.info(f"Live order API result: {order_result}")
 
-            if order_result:
-                # Extract actual fees from order result (fetched from Coinbase API)
+            if order_result and order_result.get('success') is True:
+                # Persist and reconcile only an authoritative Coinbase fill.
+                # Failed verification may still carry an order ID, but it must
+                # never appear in the ledger as a zero-size filled trade.
                 fees = order_result.get('fees', 0.0)
                 
                 # A sell fill's P&L is reconciled from verified Coinbase
@@ -1277,6 +1288,18 @@ class TradingEngine:
                                 if order_result and order_result.get('realized_pnl') is not None:
                                     pnl = float(order_result['realized_pnl'])
                                 close_confirmed = bool(order_result and order_result.get('success') is True)
+                                verified_sell_size = float((order_result or {}).get('size', 0.0))
+                                if close_confirmed and verified_sell_size + 1e-9 < sell_size:
+                                    # A verified partial fill cannot close the
+                                    # whole position. Leave it open for the
+                                    # next wallet reconciliation rather than
+                                    # claiming unsold inventory was sold.
+                                    close_confirmed = False
+                                    logger.error(
+                                        f"[TRAILING STOP] Partial sell only: "
+                                        f"filled={verified_sell_size:.8f}, requested={sell_size:.8f}; "
+                                        "position remains open for reconciliation"
+                                    )
                                 logger.info(f"[TRAILING STOP] Sell order result: {order_result}")
                             except Exception as e:
                                 logger.error(f"[TRAILING STOP] Failed to execute sell: {e}")
