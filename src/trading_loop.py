@@ -110,10 +110,13 @@ class TradingProcess:
         # Initial position sync
         try:
             logger.info("Running initial position sync...")
-            trading_engine.initial_position_sync()
+            sync_ok = trading_engine.initial_position_sync()
+            if sync_ok is not True:
+                raise RuntimeError("Initial position sync did not complete successfully")
             logger.info("Initial position sync completed")
         except Exception as e:
-            logger.error(f"Initial sync failed: {e}")
+            logger.critical(f"Initial sync failed; trading is disabled: {e}")
+            return
 
         # Start real-time trailing stop monitoring via WebSocket
         try:

@@ -61,6 +61,8 @@ class CoinbaseAPI:
         # Advanced Trade API credentials (for trading operations)
         self.advanced_api_key = settings.COINBASE_ADVANCED_API_KEY
         self.advanced_api_secret = settings.COINBASE_ADVANCED_API_SECRET
+        # Distinguish a real zero balance from an account API failure.
+        self.last_accounts_fetch_ok = False
 
         # Initialize official SDK client if available
         if SDK_AVAILABLE:
@@ -267,6 +269,7 @@ class CoinbaseAPI:
             List of account dictionaries with balance information
         """
         if not self.api_key:
+            self.last_accounts_fetch_ok = True
             # Return mock data for paper trading
             return [
                 {
@@ -289,35 +292,9 @@ class CoinbaseAPI:
         try:
             response = self._make_request('GET', 'brokerage/accounts')
             if not response:
-                # API call failed, return mock data with user's real balances
-                logger.info("API call returned None, returning mock account data")
-                return [
-                    {
-                        'currency': 'BTC',
-                        'available': 0.00016783,
-                        'balance': 0.00016783
-                    },
-                    {
-                        'currency': 'ETH',
-                        'available': 0.0,
-                        'balance': 0.0
-                    },
-                    {
-                        'currency': 'SOL',
-                        'available': 0.0054,
-                        'balance': 0.0054
-                    },
-                    {
-                        'currency': 'XRP',
-                        'available': 0.0069,
-                        'balance': 0.0069
-                    },
-                    {
-                        'currency': 'LTC',
-                        'available': 0.00015,
-                        'balance': 0.00015
-                    }
-                ]
+                self.last_accounts_fetch_ok = False
+                logger.error("Coinbase account request returned no response")
+                return []
             # Parse Coinbase Advanced Trade API response
             if isinstance(response, dict) and 'accounts' in response:
                 accounts = []
@@ -346,6 +323,7 @@ class CoinbaseAPI:
                     except (ValueError, AttributeError, TypeError) as e:
                         logger.warning(f"Error parsing account {account.get('currency', 'Unknown')}: {e}")
                         continue
+                self.last_accounts_fetch_ok = True
                 return accounts
             # Fallback for other response formats
             elif isinstance(response, list):
@@ -365,26 +343,16 @@ class CoinbaseAPI:
                     except (ValueError, AttributeError, TypeError) as e:
                         logger.warning(f"Error parsing account {account.get('currency', 'Unknown')}: {e}")
                         continue
+                self.last_accounts_fetch_ok = True
                 return accounts
             
+            self.last_accounts_fetch_ok = False
             return []
             
         except Exception as e:
             logger.error(f"Failed to get accounts: {e}")
-            # Return mock data for demonstration when API fails
-            logger.info("Returning mock account data for portfolio demonstration")
-            return [
-                {
-                    'currency': 'BTC',
-                    'available': 0.00016783,  # Real balance from logs
-                    'balance': 0.00016783
-                },
-                {
-                    'currency': 'ETH',
-                    'available': 0.0,
-                    'balance': 0.0
-                }
-            ]
+            self.last_accounts_fetch_ok = False
+            return []
     
     def get_account_balance(self, currency: str) -> float:
         """

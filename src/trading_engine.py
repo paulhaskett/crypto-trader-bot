@@ -156,6 +156,11 @@ class TradingEngine:
         for product_id in settings.PRODUCT_IDS:
             currency = product_id.split('-')[0]
             wallet_balance = coinbase_api.get_account_balance(currency)
+            if not coinbase_api.last_accounts_fetch_ok:
+                raise RuntimeError(
+                    f"Coinbase account reconciliation failed while syncing {product_id}; "
+                    "refusing to trade with unknown wallet state"
+                )
             current_price = current_prices.get(product_id, 0)
 
             # --- DUST / phantom-position guard ---
@@ -290,6 +295,7 @@ class TradingEngine:
             self.active_positions[pos['position_id']] = pos
             
         logger.info(f"=== SYNC: Position sync complete - {len(self.active_positions)} active positions ===")
+        return True
 
     def _sync_signals_to_cache(self):
         """
