@@ -174,6 +174,7 @@ class RiskManager:
 
             # Check GBP availability for BUY signals
             base_currency, quote_currency = product_id.split('-')
+            max_risk = float('inf')
             if not is_paper and quote_currency == 'GBP':
                 gbp_balance = self.get_gbp_balance()
                 available_gbp = gbp_balance - settings.GBP_BUFFER
@@ -217,13 +218,20 @@ class RiskManager:
             if quote_currency == 'GBP':
                 # GBP pair: use fixed target value
                 # Position Size = Target Value / Entry Price
-                crypto_amount = TARGET_TRADE_VALUE / entry_price
+                target_value = min(TARGET_TRADE_VALUE, max_risk if not is_paper else TARGET_TRADE_VALUE)
+                if not self._check_daily_limits(target_value):
+                    return {
+                        'size': 0.0,
+                        'reason': 'Daily loss limit would be exceeded',
+                        'risk_amount': target_value
+                    }
+                crypto_amount = target_value / entry_price
                 actual_gbp_value = crypto_amount * entry_price
-                logger.info(f"GBP pair {product_id}: target=£{TARGET_TRADE_VALUE}, price={entry_price:.2f}, crypto={crypto_amount:.8f}")
+                logger.info(f"GBP pair {product_id}: target=£{target_value}, price={entry_price:.2f}, crypto={crypto_amount:.8f}")
                 return {
                     'size': crypto_amount,
-                    'reason': f'Target £{TARGET_TRADE_VALUE} position',
-                    'risk_amount': TARGET_TRADE_VALUE,
+                    'reason': f'Target £{target_value} position',
+                    'risk_amount': target_value,
                     'gbp_value': actual_gbp_value
                 }
             elif quote_currency == 'USD':
