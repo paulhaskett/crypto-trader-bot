@@ -1,5 +1,9 @@
 # SOL Momentum-Consistent Trailing Exit Plan
 
+## Implementation progress
+
+Completed live fixes: verified-fill parsing and persistence, no-loss guards, duplicate-sell claims, pending-order restart recovery, wallet/account fail-closed reconciliation, unified WebSocket/cycle trailing economics, one-worker API scheduler election, restart cooldown restoration, cross-process position-state refresh, trade-type-scoped holdings, and position-owned sell sizing. Remaining work is tracked below and must retain the never-realise-loss policy.
+
 > **For Hermes:** Implement task-by-task only after this plan is approved.
 
 **Goal:** Prevent trailing-stop exits that contradict the bot's own uptrend and momentum signals, while preserving the no-loss guard and ensuring all exit decisions use one consistent market-data snapshot.
