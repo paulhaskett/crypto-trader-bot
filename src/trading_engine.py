@@ -109,7 +109,7 @@ class TradingEngine:
         self._positions_lock = threading.Lock()  # Thread safety for WS callbacks
         # Position claims prevent the scheduled cycle and WebSocket callback
         # from both submitting a sell before either can persist the close.
-        self._closing_positions = set()
+        self._closing_positions = {}
         self._last_peak_sync = {}  # product_id -> timestamp, rate-limit DB peak updates
         
         # Load holdings from database
@@ -146,6 +146,13 @@ class TradingEngine:
 
         # Pre-load existing DB positions so we can close phantom entries
         existing_positions = db_manager.load_open_positions(trade_type='live') or {}
+        pending_positions = db_manager.load_pending_positions(trade_type='live')
+        if pending_positions:
+            pending_ids = ', '.join(p['position_id'][:8] for p in pending_positions)
+            raise RuntimeError(
+                f"Unresolved sell_pending position(s): {pending_ids}. "
+                "Refusing to trade until order reconciliation completes"
+            )
 
         # Clear existing active positions (will reload from DB after sync)
         self.active_positions = {}
@@ -999,13 +1006,18 @@ class TradingEngine:
                 return False
             if position_id in self._closing_positions:
                 return False
-            self._closing_positions.add(position_id)
+            claim_id = uuid.uuid4().hex[:16]
+            if not db_manager.claim_open_position_for_exit(position_id, claim_id, 'trailing'):
+                return False
+            self._closing_positions[position_id] = claim_id
             return True
 
     def _release_position_close(self, position_id: str) -> None:
         """Release an unsuccessful exit claim so a later cycle can retry."""
         with self._positions_lock:
-            self._closing_positions.discard(position_id)
+            claim_id = self._closing_positions.pop(position_id, None)
+            if claim_id:
+                db_manager.release_pending_position(position_id, claim_id)
 
     def monitor_positions(self) -> List[Dict[str, Any]]:
             """
@@ -1446,7 +1458,7 @@ class TradingEngine:
             position['pnl'] = pnl
             position['exit_reason'] = reason
             position['exit_price'] = exit_price
-            self._closing_positions.discard(position_id)
+            self._closing_positions.pop(position_id, None)
 
             risk_manager.close_position(position_id, pnl)
 

@@ -1253,6 +1253,32 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def load_pending_positions(self, trade_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Load positions left in sell_pending after a process restart."""
+        session = self.get_session()
+        try:
+            query = session.query(OpenPosition).filter(OpenPosition.status == 'sell_pending')
+            if trade_type:
+                query = query.filter(OpenPosition.trade_type == trade_type)
+            return [
+                {
+                    'position_id': p.position_id,
+                    'product_id': p.product_id,
+                    'size': p.size,
+                    'remaining_size': p.remaining_size,
+                    'entry_price': p.entry_price,
+                    'exit_reason': p.exit_reason,
+                    'opened_at': p.opened_at,
+                    'trade_type': p.trade_type,
+                }
+                for p in query.all()
+            ]
+        except Exception as e:
+            logger.error(f"Failed to load pending positions: {e}")
+            return []
+        finally:
+            session.close()
+
     def load_open_positions(self, trade_type: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         """Load all open positions from the database.
         
@@ -1530,6 +1556,47 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             logger.error(f"Failed to close position {position_id[:8]}...: {e}")
+            return False
+        finally:
+            session.close()
+
+    def claim_open_position_for_exit(self, position_id: str, claim_id: str, reason: str = '') -> bool:
+        """Atomically transition an open position to sell_pending."""
+        session = self.get_session()
+        try:
+            changed = session.query(OpenPosition).filter(
+                OpenPosition.position_id == position_id,
+                OpenPosition.status == 'open'
+            ).update({
+                OpenPosition.status: 'sell_pending',
+                OpenPosition.exit_reason: f"pending:{claim_id}:{reason}"[:100]
+            }, synchronize_session=False)
+            session.commit()
+            return changed == 1
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to claim position {position_id[:8]}... for exit: {e}")
+            return False
+        finally:
+            session.close()
+
+    def release_pending_position(self, position_id: str, claim_id: str) -> bool:
+        """Return a failed exit claim to open, without overwriting another claim."""
+        session = self.get_session()
+        try:
+            changed = session.query(OpenPosition).filter(
+                OpenPosition.position_id == position_id,
+                OpenPosition.status == 'sell_pending',
+                OpenPosition.exit_reason.like(f"pending:{claim_id}:%")
+            ).update({
+                OpenPosition.status: 'open',
+                OpenPosition.exit_reason: ''
+            }, synchronize_session=False)
+            session.commit()
+            return changed == 1
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to release exit claim {position_id[:8]}...: {e}")
             return False
         finally:
             session.close()
