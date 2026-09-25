@@ -1674,6 +1674,20 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def get_position_status(self, position_id: str) -> Optional[str]:
+        """Read the durable lifecycle state for one position."""
+        session = self.get_session()
+        try:
+            row = session.query(OpenPosition.status).filter(
+                OpenPosition.position_id == position_id
+            ).first()
+            return row[0] if row else None
+        except Exception as e:
+            logger.error(f"Failed to read position status {position_id[:8]}...: {e}")
+            return None
+        finally:
+            session.close()
+
     def get_all_open_positions_detailed(self) -> List[Dict[str, Any]]:
         """Get all open positions with full details for dashboard display."""
         session = self.get_session()

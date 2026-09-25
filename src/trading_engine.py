@@ -1084,6 +1084,15 @@ class TradingEngine:
             scale_in_candidates = []  # Collect candidates, execute only best
             scale_in_spent = 0.0  # Track GBP spent this cycle
 
+            # The API worker can close a position in its own process. Refresh
+            # durable lifecycle state before evaluating exits so stale in-memory
+            # rows cannot trigger another order after a manual close.
+            for position_id in list(self.active_positions):
+                status = db_manager.get_position_status(position_id)
+                if status == 'closed':
+                    self.active_positions.pop(position_id, None)
+                    self._closing_positions.pop(position_id, None)
+
             # One quote snapshot is shared by every position in this cycle.
             # Fetching it after the loop previously also left the empty-map
             # path with an uninitialised variable.
