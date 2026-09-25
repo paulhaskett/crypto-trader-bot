@@ -131,6 +131,18 @@ class TradingEngine:
             if 'regime' not in pos:
                 pos['regime'] = 'neutral'
             self.active_positions[pos['position_id']] = pos
+
+        # Reconstruct cooldowns from verified persisted fills so a restart
+        # cannot immediately bypass the per-product trading cooldown.
+        trade_type = 'paper' if self.paper_trading else 'live'
+        for trade in db_manager.get_trades(trade_type=trade_type, limit=1000):
+            if (
+                trade.get('status') == 'filled'
+                and float(trade.get('size') or 0.0) > 0
+                and trade.get('product_id') not in self.last_trade_time
+                and trade.get('timestamp') is not None
+            ):
+                self.last_trade_time[trade['product_id']] = trade['timestamp']
         
         logger.info(f"Trading Engine initialized (paper trading: {self.paper_trading}, active_positions={len(self.active_positions)})")
 
