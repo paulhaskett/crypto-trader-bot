@@ -9,6 +9,7 @@ import json
 import time
 import logging
 import threading
+import fcntl
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 # APScheduler instance for auto-retrain
 _scheduler = BackgroundScheduler(timezone='UTC')
+_scheduler_lock_handle = None
 
 # Import settings and setup auto-retrain scheduler
 from config.settings import settings
@@ -75,7 +77,14 @@ def refresh_signals_background():
 
 try:
     from src.ai_model import ai_model
-    if settings.AUTO_RETRAIN_ENABLED:
+    _scheduler_lock_handle = open(BASE_DIR / 'data' / '.api_scheduler.lock', 'a+')
+    try:
+        fcntl.flock(_scheduler_lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _scheduler_leader = True
+    except BlockingIOError:
+        _scheduler_leader = False
+
+    if _scheduler_leader and settings.AUTO_RETRAIN_ENABLED:
         _scheduler.add_job(
             ai_model.scheduled_retrain,
             CronTrigger(
@@ -86,8 +95,6 @@ try:
         )
         _scheduler.start()
         logger.info(f"Auto-retrain scheduled: {settings.AUTO_RETRAIN_DAY_OF_WEEK} at {settings.AUTO_RETRAIN_HOUR:02d}:{settings.AUTO_RETRAIN_MINUTE:02d} UTC")
-        
-        # Add signal refresh scheduler (every 10 minutes)
         _scheduler.add_job(
             refresh_signals_background,
             'interval',
@@ -95,8 +102,10 @@ try:
             id='signal_refresh'
         )
         logger.info("Signal refresh scheduler: every 10 minutes")
-    else:
+    elif _scheduler_leader:
         logger.info("Auto-retrain disabled")
+    else:
+        logger.info("Scheduler owned by another API worker; skipping duplicate scheduler")
 except Exception as e:
     logger.warning(f"Could not setup scheduler: {e}")
 
@@ -116,9 +125,6 @@ _retrain_status = {
     'result': None
 }
 _retrain_lock = threading.Lock()
-
-# APScheduler instance for auto-retrain
-_scheduler = BackgroundScheduler(timezone='UTC')
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
