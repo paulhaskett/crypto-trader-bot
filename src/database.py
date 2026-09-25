@@ -480,8 +480,12 @@ class DatabaseManager:
         """Save or update a holding in the database."""
         session = self.get_session()
         try:
-            # Check if holding exists for this product
-            existing = session.query(Holding).filter(Holding.product_id == product_id).first()
+            # Holding identity includes trade type so a paper update can never
+            # overwrite the live wallet record (or vice versa).
+            query = session.query(Holding).filter(Holding.product_id == product_id)
+            if trade_type:
+                query = query.filter(Holding.trade_type == trade_type)
+            existing = query.first()
             
             if existing:
                 # Update existing holding
