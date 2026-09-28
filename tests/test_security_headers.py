@@ -39,11 +39,10 @@ def test_security_headers_and_request_id_are_present():
     assert response.headers['Cache-Control'] == 'no-store'
 
 
-def test_mutations_fail_closed_when_auth_is_not_configured(monkeypatch):
+def test_mutations_remain_available_in_lan_only_mode(monkeypatch):
     monkeypatch.delenv('DASHBOARD_AUTH_TOKEN', raising=False)
     response = asyncio.run(security_and_audit_middleware(make_request('POST', '/api/control/retrain'), ok_call_next(None)))
-    assert response.status_code == 503
-    assert b'auth_not_configured' in response.body
+    assert response.status_code == 200
 
 
 def test_valid_token_requires_matching_csrf_header(monkeypatch):

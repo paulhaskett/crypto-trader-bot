@@ -132,9 +132,7 @@ async def security_and_audit_middleware(request: Request, call_next):
     auth_error = None
     if mutating and not auth_exempt:
         auth_token = os.getenv('DASHBOARD_AUTH_TOKEN', '').strip()
-        if not auth_token:
-            auth_error = (503, 'auth_not_configured', 'Mutation routes are disabled until DASHBOARD_AUTH_TOKEN is configured')
-        else:
+        if auth_token:
             supplied = request.headers.get('Authorization', '')
             bearer = supplied[7:] if supplied.startswith('Bearer ') else request.headers.get('X-Dashboard-Token', '')
             csrf = request.headers.get('X-Dashboard-CSRF', '')
@@ -2845,7 +2843,8 @@ async def auth_status():
     return {
         "status": "success",
         "auth_configured": bool(os.getenv('DASHBOARD_AUTH_TOKEN', '').strip()),
-        "csrf_mode": "same-token-header",
+        "auth_mode": "token_required" if os.getenv('DASHBOARD_AUTH_TOKEN', '').strip() else "lan_only",
+        "csrf_mode": "same-token-header" if os.getenv('DASHBOARD_AUTH_TOKEN', '').strip() else "not_required_in_lan_only_mode",
     }
 
 @app.get("/api/resources")
