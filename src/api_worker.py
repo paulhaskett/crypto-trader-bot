@@ -13,6 +13,7 @@ import fcntl
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, HTTPException
@@ -115,6 +116,47 @@ app = FastAPI(
     title="Crypto Trading Bot API",
     version="1.0.0"
 )
+
+_AUDIT_LOG = BASE_DIR / 'logs' / 'audit.log'
+_AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+
+
+@app.middleware("http")
+async def security_and_audit_middleware(request: Request, call_next):
+    """Add security headers and audit mutation requests without logging secrets."""
+    request_id = request.headers.get('X-Request-ID') or uuid4().hex
+    started = time.monotonic()
+    response = await call_next(request)
+    response.headers['X-Request-ID'] = request_id
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'same-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "font-src 'self' https://cdnjs.cloudflare.com; "
+        "img-src 'self' data:; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    )
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        event = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'request_id': request_id,
+            'method': request.method,
+            'path': request.url.path,
+            'status_code': response.status_code,
+            'duration_ms': round((time.monotonic() - started) * 1000, 1),
+        }
+        try:
+            with _AUDIT_LOG.open('a', encoding='utf-8') as audit_file:
+                audit_file.write(json.dumps(event, separators=(',', ':')) + '\\n')
+        except Exception as audit_error:
+            logger.warning(f"Could not write audit event: {audit_error}")
+    return response
 
 # Global retrain status (shared across workers)
 # Total will be set dynamically based on settings.PRODUCT_IDS
