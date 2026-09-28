@@ -537,6 +537,13 @@ class TradingEngine:
         Returns:
             True if trading is allowed
         """
+        # The API control endpoint persists this flag. Keep monitoring existing
+        # positions while stopped, but prevent new entries until read-back says
+        # trading is active.
+        if not db_manager.get_trading_active():
+            logger.info(f"SKIP: {product_id} - trading is stopped")
+            return False
+
         # Check trading frequency limits
         now = datetime.now()
         if product_id in self.last_trade_time:
