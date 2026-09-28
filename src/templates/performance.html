@@ -550,7 +550,7 @@
 
             const rows = pb.map(p => `
                 <tr>
-                    <td><strong>${p.product}</strong></td>
+                    <td><strong>${escapeHtml(p.product || '-')}</strong></td>
                     <td>${p.trades}</td>
                     <td class="pnl-positive">${p.wins}</td>
                     <td class="pnl-negative">${p.losses}</td>

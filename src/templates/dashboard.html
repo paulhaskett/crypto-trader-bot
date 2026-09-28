@@ -658,7 +658,7 @@
                     ? `<span class="badge bg-${gate.confirmed ? 'success' : 'warning'}">${gate.confirmed ? 'TROUGH CONFIRMED' : 'ENTRY WAIT'}</span>`
                     : '';
                 const gateDetail = info.signal === 'BUY' && gate.enabled
-                    ? `<div class="small ${gate.confirmed ? 'text-success' : 'text-warning'}"><i class="fas fa-mountain me-1"></i>${gate.reason || 'unknown'}${gate.candidate_low ? ` | Low £${Number(gate.candidate_low).toLocaleString()} | Level £${Number(gate.confirmation_level).toLocaleString()}` : ''}</div>`
+                    ? `<div class="small ${gate.confirmed ? 'text-success' : 'text-warning'}"><i class="fas fa-mountain me-1"></i>${escapeHtml(gate.reason || 'unknown')}${gate.candidate_low ? ` | Low £${Number(gate.candidate_low).toLocaleString()} | Level £${Number(gate.confirmation_level).toLocaleString()}` : ''}</div>`
                     : '';
                 const age = info.signal_age_seconds != null ? `${Math.floor(info.signal_age_seconds / 60)}m old` : 'age unknown';
                 const balDisplay = bal ? `<small class="text-muted">Hold:</small> ${bal.balance?.toFixed(6)} <small class="text-muted">£${bal.value?.toFixed(2)}</small>` : '<small class="text-muted">No holding</small>';
@@ -668,7 +668,7 @@
                     <div class="card signal-card ${cls}">
                         <div class="card-body py-2">
                             <div class="signal-card-head">
-                                <div><h6><i class="${icons[sym] || 'fas fa-coins'} me-1"></i>${pid}</h6><h4 class="text-primary mb-0">${info.formatted_price || 'N/A'}</h4></div>
+                                <div><h6><i class="${icons[sym] || 'fas fa-coins'} me-1"></i>${escapeHtml(pid)}</h6><h4 class="text-primary mb-0">${escapeHtml(info.formatted_price || 'N/A')}</h4></div>
                                 ${renderSparkline(info.price_history, sig)}
                             </div>
                             <div class="mb-2">
@@ -680,10 +680,10 @@
                             </div>
                             <small class="text-muted">${sig === 'HOLD' ? 'HOLD consensus' : conf + '% Adjusted'} | ${sig === 'HOLD' ? '' : Math.round(info.raw_confidence ?? conf) + '% Raw | '}${info.agreement || 0}% Agmt | ${age}</small>
                             ${gateBadge}
-                            ${info.threshold_reason ? '<small class="text-success d-block">' + info.threshold_reason + '</small>' : ''}
+                            ${info.threshold_reason ? '<small class="text-success d-block">' + escapeHtml(info.threshold_reason) + '</small>' : ''}
                             ${gateDetail}
                             <div class="mt-2 small">${balDisplay}</div>
-                            <div class="small text-muted"><i class="fas fa-chart-line me-1"></i>${info.regime || 'neutral'}</div>
+                            <div class="small text-muted"><i class="fas fa-chart-line me-1"></i>${escapeHtml(info.regime || 'neutral')}</div>
                         </div>
                     </div>
                 </div>`;
@@ -699,8 +699,8 @@
             tbody.innerHTML = d.positions.map(p => `
                 <!-- Main Position Row -->
                 <tr class="position-row">
-                    <td><strong>${p.product_id}</strong></td>
-                    <td><span class="badge bg-${p.side === 'BUY' ? 'success' : 'danger'}">${p.side}</span></td>
+                    <td><strong>${escapeHtml(p.product_id || '-')}</strong></td>
+                    <td><span class="badge bg-${p.side === 'BUY' ? 'success' : 'danger'}">${escapeHtml(p.side || '-')}</span></td>
                     <td>${p.size}</td>
                     <td>${p.remaining_size || p.size}</td>
                     <td>£${p.original_entry_price?.toLocaleString()}</td>
@@ -714,15 +714,15 @@
                 </tr>
                 <!-- Trailing Stop Details Row -->
                 <tr class="trailing-stop-row">
-                    <td>↳ ${p.product_id}</td>
+                    <td>↳ ${escapeHtml(p.product_id || '-')}</td>
                     <td colspan="4">BE: £${p.break_even?.toLocaleString()} | <strong>Stop: £${p.trailing_stop?.toLocaleString()}</strong><br><small class="text-muted">BE gap: ${p.break_even_gap_pct >= 0 ? '+' : ''}${p.break_even_gap_pct?.toFixed(2)}% | Giveback: ${p.peak_giveback_pct?.toFixed(2)}%</small></td>
-                    <td>Peak: £${p.peak_price?.toLocaleString()}<br><small class="text-muted">Signal: ${p.signal_action || '-'} ${p.signal_confidence ? p.signal_confidence.toFixed(1) + '%' : ''}</small></td>
+                    <td>Peak: £${p.peak_price?.toLocaleString()}<br><small class="text-muted">Signal: ${escapeHtml(p.signal_action || '-')} ${p.signal_confidence ? p.signal_confidence.toFixed(1) + '%' : ''}</small></td>
                     <td>ATR: ${p.atr_available ? '£' + p.atr?.toLocaleString() + ' (' + p.atr_pct?.toFixed(3) + '%)' : '-'}</td>
                     <td>ATR stop: ${p.atr_based_stop_pct != null ? p.atr_based_stop_pct.toFixed(3) + '%' : '-'}</td>
                     <td>Trail: ${p.trailing_pct?.toFixed(3)}% | Gap: ${p.stop_distance != null ? '£' + p.stop_distance.toFixed(2) + ' (' + p.stop_distance_pct.toFixed(2) + '%)' : '-'}</td>
                     <td><span class="badge bg-${p.trailing_activated ? 'success' : 'secondary'}">${p.stop_note || (p.trailing_activated ? 'Active' : 'Pending')}</span></td>
-                    <td><span class="badge bg-info">${p.regime || 'neutral'}</span></td>
-                    <td colspan="2"><small class="text-muted">${p.underwater_minutes ? `Underwater: ${Math.floor(p.underwater_minutes / 60)}h ${p.underwater_minutes % 60}m | Max DD: ${p.underwater_max_drawdown_pct?.toFixed(2)}%` : (p.entry_reason || '')}</small></td>
+                    <td><span class="badge bg-info">${escapeHtml(p.regime || 'neutral')}</span></td>
+                    <td colspan="2"><small class="text-muted">${p.underwater_minutes ? `Underwater: ${Math.floor(p.underwater_minutes / 60)}h ${p.underwater_minutes % 60}m | Max DD: ${p.underwater_max_drawdown_pct?.toFixed(2)}%` : escapeHtml(p.entry_reason || '')}</small></td>
                 </tr>`).join('');
         }
 
@@ -734,14 +734,14 @@
             cnt.textContent = d.count;
             tbody.innerHTML = d.trades.map(t => `
                 <tr>
-                    <td>${t.date || '-'}</td>
-                    <td>${t.timestamp}</td>
-                    <td><strong>${t.product_id}</strong></td>
-                    <td><span class="badge bg-${t.side === 'BUY' ? 'success' : 'danger'}">${t.side}</span></td>
+                    <td>${escapeHtml(t.date || '-')}</td>
+                    <td>${escapeHtml(t.timestamp || '-')}</td>
+                    <td><strong>${escapeHtml(t.product_id || '-')}</strong></td>
+                    <td><span class="badge bg-${t.side === 'BUY' ? 'success' : 'danger'}">${escapeHtml(t.side || '-')}</span></td>
                     <td>${t.size}</td>
-                    <td>${t.formatted_price}</td>
-                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl >= 0 ? '▲' : '▼'} ${t.formatted_pnl}</td>
-                    <td><span class="badge bg-secondary">${t.status}</span></td>
+                    <td>${escapeHtml(t.formatted_price || '-')}</td>
+                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl >= 0 ? '▲' : '▼'} ${escapeHtml(t.formatted_pnl || '-')}</td>
+                    <td><span class="badge bg-secondary">${escapeHtml(t.status || '-')}</span></td>
                 </tr>`).join('');
         }
 
@@ -751,14 +751,14 @@
             if (!d || d.status !== 'success' || !d.positions?.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No closed positions</td></tr>'; return; }
             tbody.innerHTML = d.positions.map(p => `
                 <tr>
-                    <td>${p.date || '-'}</td>
-                    <td><strong>${p.product_id}</strong></td>
-                    <td><span class="badge bg-${p.side === 'BUY' ? 'success' : 'danger'}">${p.side}</span></td>
+                    <td>${escapeHtml(p.date || '-')}</td>
+                    <td><strong>${escapeHtml(p.product_id || '-')}</strong></td>
+                    <td><span class="badge bg-${p.side === 'BUY' ? 'success' : 'danger'}">${escapeHtml(p.side || '-')}</span></td>
                     <td>${p.size}</td>
                     <td>£${p.entry_price?.toLocaleString()}</td>
                     <td>£${p.exit_price?.toLocaleString()}</td>
-                    <td class="${p.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${p.pnl >= 0 ? '▲' : '▼'} ${p.formatted_pnl}</td>
-                    <td><span class="badge bg-secondary">${p.status}</span></td>
+                    <td class="${p.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${p.pnl >= 0 ? '▲' : '▼'} ${escapeHtml(p.formatted_pnl || '-')}</td>
+                    <td><span class="badge bg-secondary">${escapeHtml(p.status || '-')}</span></td>
                 </tr>`).join('');
         }
 
