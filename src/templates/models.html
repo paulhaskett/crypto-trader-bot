@@ -236,11 +236,18 @@
         
         let pollInterval = null;
 
+        const requestControllers = {};
         async function fetchJSON(url) {
+            const key = url.split('?')[0];
+            requestControllers[key]?.abort();
+            const controller = new AbortController();
+            requestControllers[key] = controller;
             try {
-                const r = await fetch(url);
-                return r.ok ? await r.json() : null;
-            } catch {
+                const r = await fetch(url, { signal: controller.signal });
+                const data = r.ok ? await r.json() : null;
+                return requestControllers[key] === controller && r.ok ? data : null;
+            } catch (error) {
+                if (error.name === 'AbortError') return null;
                 return null;
             }
         }

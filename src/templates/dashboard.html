@@ -381,13 +381,20 @@
             banner.style.display = 'block';
         }
 
+        const requestControllers = {};
         async function fetchJSON(url) {
+            const key = url.split('?')[0];
+            requestControllers[key]?.abort();
+            const controller = new AbortController();
+            requestControllers[key] = controller;
             try {
-                const r = await fetch(url);
+                const r = await fetch(url, { signal: controller.signal });
                 const data = r.ok ? await r.json() : { data_status: 'unavailable', error_code: `http_${r.status}` };
+                if (requestControllers[key] !== controller) return null;
                 updateDataStatusBanner(data, url);
                 return r.ok ? data : null;
-            } catch {
+            } catch (error) {
+                if (error.name === 'AbortError') return null;
                 const data = { data_status: 'unavailable', error_code: 'network_error' };
                 updateDataStatusBanner(data, url);
                 return null;
