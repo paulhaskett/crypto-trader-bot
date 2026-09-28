@@ -396,7 +396,9 @@ class CoinbaseAPI:
                     'volume_24h': float(response.get('volume_24h', 0)),
                     'low_24h': float(response.get('low_24h', 0)),
                     'high_24h': float(response.get('high_24h', 0)),
-                    'price_percent_chg_24h': float(response.get('price_percent_chg_24h', 0))
+                    'price_percent_chg_24h': float(response.get('price_percent_chg_24h', 0)),
+                    'data_status': 'fresh',
+                    'source': 'coinbase'
                 }
             else:
                 # Fallback to mock data if API fails
@@ -510,7 +512,9 @@ class CoinbaseAPI:
             'low_24h': price * 0.95,
             'high_24h': price * 1.05,
             'price_percent_chg_24h': 0.0,
-            'is_fallback': True  # Flag to indicate this is fallback data
+            'is_fallback': True,  # Flag to indicate this is fallback data
+            'data_status': 'unavailable',
+            'source': 'fallback'
         }
     
     def get_candles(self, product_id: str, start: datetime = None,

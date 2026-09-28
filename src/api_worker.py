@@ -10,7 +10,7 @@ import time
 import logging
 import threading
 import fcntl
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from zoneinfo import ZoneInfo
@@ -31,6 +31,7 @@ from src.cache_manager import SIGNAL_CACHE_FILE, LAST_CYCLE_FILE
 from src.portfolio_utils import account_value_gbp
 from src.entry_confirmation import confirm_trough_rebound
 from src.model_status import build_model_health
+from src.api_contract import attach_meta
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -265,15 +266,20 @@ async def get_status():
     """Get overall bot status."""
     try:
         db = load_db_manager()
-        return {
-            "status": "running",
+        last_cycle = read_last_cycle_time()
+        now = time.time()
+        return attach_meta({
+            "status": "success",
             "trading_active": db.get_trading_active(),
             "paper_trading": db.get_paper_trading(),
+            "last_cycle_at": datetime.fromtimestamp(last_cycle, timezone.utc).isoformat(),
+            "last_cycle_age_seconds": max(0, int(now - last_cycle)),
+            "trading_process": "running" if db.get_trading_active() else "stopped",
             "timestamp": datetime.now().isoformat()
-        }
+        }, data_status="fresh", source="database")
     except Exception as e:
         logger.error(f"Status error: {e}")
-        return {"status": "error", "message": str(e)}
+        return attach_meta({"status": "error", "message": str(e)}, data_status="unavailable", source="database", error_code="status_unavailable")
 
 @app.get("/api/countdown")
 async def get_countdown():
@@ -567,7 +573,7 @@ async def get_portfolio_summary():
         except Exception as e:
             logger.error(f"Error counting models: {e}")
         
-        return {
+        return attach_meta({
             "status": "success",
             "total_value": round(total_value, 2),
             "formatted_total_value": format_currency(total_value, display_currency),
@@ -596,12 +602,12 @@ async def get_portfolio_summary():
             "exchange_rate": cc.get_exchange_rate('USD', display_currency) or 0.75,
             "display_currency": display_currency,
             "holdings": holdings
-        }
+        }, data_status="fresh", source="coinbase+database+market")
     except Exception as e:
         logger.error(f"Portfolio summary error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return {"status": "error", "message": str(e)}
+        return attach_meta({"status": "error", "message": str(e)}, data_status="unavailable", source="coinbase+database+market", error_code="portfolio_unavailable")
 
 @app.get("/api/portfolio/coinbase_pnl")
 async def get_coinbase_realized_pnl():
@@ -794,6 +800,8 @@ async def get_market_conditions():
             try:
                 ticker = coinbase.get_product_ticker(product_id)
                 price = ticker.get('price', 0) or 0
+                ticker_status = ticker.get('data_status', 'fresh' if price > 0 else 'unavailable')
+                ticker_source = ticker.get('source', 'coinbase' if price > 0 else 'unknown')
                 try:
                     history_rows = db.get_market_data(product_id, limit=24)
                     price_history = [round(float(row.get('close', 0)), 8) for row in reversed(history_rows) if float(row.get('close', 0) or 0) > 0]
@@ -911,6 +919,8 @@ async def get_market_conditions():
                 
                 conditions[product_id] = {
                     'price': round(price, 2),
+                    'data_status': ticker_status,
+                    'source': ticker_source,
                     'formatted_price': f"{symbol}{price:,.2f}",
                     'price_history': price_history,
                     'signal': signal,
@@ -934,6 +944,9 @@ async def get_market_conditions():
                 logger.warning(f"Error getting conditions for {product_id}: {e}")
                 conditions[product_id] = {
                     'price': 0,
+                    'data_status': 'unavailable',
+                    'source': 'coinbase',
+                    'error_code': 'market_product_unavailable',
                     'formatted_price': 'N/A',
                     'price_history': [],
                     'signal': 'HOLD',
@@ -954,14 +967,14 @@ async def get_market_conditions():
                     'rf_accuracy': 0
                 }
         
-        return {
+        return attach_meta({
             "status": "success",
             "conditions": conditions,
             "timestamp": datetime.now().isoformat()
-        }
+        }, data_status="fresh", source="coinbase+database+signal_cache")
     except Exception as e:
         logger.error(f"Market conditions error: {e}")
-        return {"status": "error", "message": str(e)}
+        return attach_meta({"status": "error", "message": str(e)}, data_status="unavailable", source="coinbase+database+signal_cache", error_code="market_conditions_unavailable")
 
 @app.get("/api/open_positions")
 async def get_open_positions():
@@ -1130,14 +1143,14 @@ async def get_open_positions():
             except Exception as e:
                 logger.warning(f"Error processing position {product_id}: {e}")
         
-        return {
+        return attach_meta({
             "status": "success",
             "positions": rows,
             "count": len(rows)
-        }
+        }, data_status="fresh", source="database+market")
     except Exception as e:
         logger.error(f"Open positions error: {e}")
-        return {"status": "error", "message": str(e)}
+        return attach_meta({"status": "error", "message": str(e)}, data_status="unavailable", source="database+market", error_code="open_positions_unavailable")
 
 @app.get("/api/closed_positions")
 async def get_closed_positions(limit: int = 50):

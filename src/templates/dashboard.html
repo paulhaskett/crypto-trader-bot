@@ -72,6 +72,7 @@
 
     <!-- Toast Container -->
     <div class="toast-container" id="toast-container"></div>
+    <div class="container-fluid mt-2" id="data-status-banner" role="status" aria-live="polite" style="display:none;"></div>
 
     <!-- Navbar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
@@ -359,8 +360,36 @@
         let state = { tradingActive: false, currency: 'GBP' };
         let tradesLoaded = false;
 
+        const dataStatuses = {};
+        function updateDataStatusBanner(data, url) {
+            const banner = document.getElementById('data-status-banner');
+            if (!banner) return;
+            dataStatuses[url] = data?.data_status || 'fresh';
+            const affected = Object.entries(dataStatuses).filter(([, status]) => status !== 'fresh');
+            if (!affected.length) {
+                banner.style.display = 'none';
+                banner.textContent = '';
+                return;
+            }
+            const unavailable = affected.filter(([, status]) => status === 'unavailable');
+            const status = unavailable.length ? 'unavailable' : 'stale';
+            const details = affected.map(([resource, state]) => `${resource}: ${state}`).join(' | ');
+            banner.className = `alert ${status === 'stale' ? 'alert-warning' : 'alert-danger'} mb-2`;
+            banner.textContent = `${status === 'stale' ? 'Stale data' : 'Data unavailable'} — ${details}`;
+            banner.style.display = 'block';
+        }
+
         async function fetchJSON(url) {
-            try { const r = await fetch(url); return r.ok ? await r.json() : null; } catch { return null; }
+            try {
+                const r = await fetch(url);
+                const data = r.ok ? await r.json() : { data_status: 'unavailable', error_code: `http_${r.status}` };
+                updateDataStatusBanner(data, url);
+                return r.ok ? data : null;
+            } catch {
+                const data = { data_status: 'unavailable', error_code: 'network_error' };
+                updateDataStatusBanner(data, url);
+                return null;
+            }
         }
 
         function showToast(msg, type = 'info') {
@@ -556,6 +585,11 @@
             if (!d || d.status !== 'success') { grid.innerHTML = '<div class="col-12 text-center text-muted py-4">Loading...</div>'; return; }
 
             const conds = d.conditions || {};
+            const unavailableProducts = Object.entries(conds).filter(([, info]) => info.data_status === 'unavailable');
+            updateDataStatusBanner({
+                data_status: unavailableProducts.length ? 'unavailable' : (d.data_status || 'fresh'),
+                error_code: unavailableProducts.length ? 'market_product_unavailable' : null,
+            }, API.signals);
             grid.innerHTML = '';
 
             const icons = { BTC: 'fab fa-bitcoin text-warning', ETH: 'fab fa-ethereum text-primary', SOL: 'fas fa-sun text-info', LTC: 'fas fa-litecoin text-secondary', DOT: 'fas fa-circle text-info', ADA: 'fas fa-cardano-alt text-primary', LINK: 'fas fa-link text-info', UNI: 'fas fa-university text-primary' };
