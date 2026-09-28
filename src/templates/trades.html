@@ -213,6 +213,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/render.js"></script>
     <script>
         const API = {
             ledger: '/api/ledger'
@@ -386,17 +387,17 @@
             } else {
 tbody.innerHTML = pageTrades.map(t => `
                     <tr>
-                        <td>${t.date || '-'}</td>
-                        <td>${t.time || '-'}</td>
-                        <td><strong>${t.product_id}</strong></td>
-                        <td><span class=\"badge bg-${t.side === 'BUY' ? 'success' : 'danger'}\">${t.side}</span></td>
+                        <td>${escapeHtml(t.date || '-')}</td>
+                        <td>${escapeHtml(t.time || '-')}</td>
+                        <td><strong>${escapeHtml(t.product_id || '-')}</strong></td>
+                        <td><span class="badge bg-${t.side === 'BUY' ? 'success' : 'danger'}">${escapeHtml(t.side || '-')}</span></td>
                         <td>${formatCrypto(t.size, t.price)}</td>
                         <td>£${(t.price || 0).toFixed(2)}</td>
                         <td>${t.exit_price ? '£' + t.exit_price.toFixed(2) : '-'}</td>
                         <td class=\"${(t.pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}\">${formatGBP(t.pnl || 0)}</td>
                         <td class=\"${(t.pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}\">${t.pnl_pct !== undefined ? (t.pnl_pct >= 0 ? '+' : '') + t.pnl_pct.toFixed(2) + '%' : '-'}</td>
-                        <td><span class="badge bg-secondary">${t.row_type === 'fill' ? 'FILL' : 'POSITION'} · ${t.status}</span></td>
-                        <td>${t.exit_reason || '-'}</td>
+                        <td><span class="badge bg-secondary">${t.row_type === 'fill' ? 'FILL' : 'POSITION'} · ${escapeHtml(t.status || '-')}</span></td>
+                        <td>${escapeHtml(t.exit_reason || '-')}</td>
                     </tr>
                 `).join('');
             }

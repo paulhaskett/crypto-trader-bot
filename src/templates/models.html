@@ -225,6 +225,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/render.js"></script>
     <script>
         const API = {
             models: '/api/models/status',
@@ -255,8 +256,15 @@
         function showToast(msg, type = 'info') {
             const c = document.getElementById('toast-container');
             const id = 't' + Date.now();
-            c.innerHTML += `<div class="toast" id="${id}"><div class="toast-body">${msg}</div></div>`;
-            new bootstrap.Toast(document.getElementById(id)).show();
+            const toast = document.createElement('div');
+            toast.className = `toast text-bg-${type}`;
+            toast.id = id;
+            const body = document.createElement('div');
+            body.className = 'toast-body';
+            body.textContent = String(msg ?? '');
+            toast.appendChild(body);
+            c.appendChild(toast);
+            new bootstrap.Toast(toast).show();
         }
 
         async function loadModelsData() {
@@ -314,7 +322,7 @@
                             const detail = modelHealth[type];
                             const label = type.toUpperCase();
                             if (!detail.available) return `<div><span class="badge bg-secondary">${label}</span> Unavailable</div>`;
-                            return `<div><span class="badge bg-secondary">${label}</span> ${detail.signal || '-'} ${(detail.confidence * 100).toFixed(1)}%</div>`;
+                            return `<div><span class="badge bg-secondary">${label}</span> ${escapeHtml(detail.signal || '-')} ${(detail.confidence * 100).toFixed(1)}%</div>`;
                         }).join('');
                     
                     signalsGrid.innerHTML += `
@@ -322,8 +330,8 @@
                             <div class="card model-card ${signalClass} h-100">
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <strong>${productId}</strong>
-                                        <span class="badge ${signalBadge}">${model.signal || 'N/A'}</span>
+                                        <strong>${escapeHtml(productId)}</strong>
+                                        <span class="badge ${signalBadge}">${escapeHtml(model.signal || 'N/A')}</span>
                                     </div>
                                     <div class="mb-2">
                                         <small class="text-muted">Win Rate</small>
@@ -359,7 +367,7 @@
                                     </div>
                                     <div>
                                         <small class="text-muted">Regime:</small>
-                                        <span class="badge ${regimeBadge} ms-1">${model.regime || 'unknown'}</span>
+                                        <span class="badge ${regimeBadge} ms-1">${escapeHtml(model.regime || 'unknown')}</span>
                                     </div>
                                 </div>
                             </div>
@@ -379,14 +387,14 @@
                     
                     tbody.innerHTML += `
                         <tr>
-                            <td><strong>${productId}</strong></td>
+                            <td><strong>${escapeHtml(productId)}</strong></td>
                             <td>
                                 <span class="badge ${model.trained ? 'bg-success' : 'bg-warning'}">
                                     ${model.trained ? 'Trained' : 'Not Trained'}
                                 </span>
                             </td>
                             <td>
-                                <span class="badge ${signalBadge}">${model.signal || 'N/A'}</span>
+                                <span class="badge ${signalBadge}">${escapeHtml(model.signal || 'N/A')}</span>
                             </td>
                             <td>
                                 <span class="badge ${model.unanimous ? 'bg-success' : model.agreement >= 0.66 ? 'bg-warning' : 'bg-secondary'}">
@@ -447,7 +455,7 @@
                         
                         metricsBody.innerHTML += `
                             <tr>
-                                <td><strong>${model.product_id}</strong></td>
+                                <td><strong>${escapeHtml(model.product_id || '-')}</strong></td>
                                 <td><span class="badge bg-secondary">${mt.name}</span></td>
                                 <td class="${winRateClass}">${winRate > 0 ? (winRate * 100).toFixed(1) + '%' : '-'}</td>
                                 <td>${pf > 0 ? pf.toFixed(2) : '-'}</td>
@@ -479,11 +487,11 @@
                     
                     matrixBody.innerHTML += `
                         <tr>
-                            <td><strong>${model.product_id}</strong></td>
+                            <td><strong>${escapeHtml(model.product_id || '-')}</strong></td>
                             <td>
                                 <span class="badge ${model.signal === 'BUY' ? 'bg-success' : 
                                                model.signal === 'SELL' ? 'bg-danger' : 'bg-secondary'}">
-                                    ${model.signal || 'N/A'}
+                                    ${escapeHtml(model.signal || 'N/A')}
                                 </span>
                             </td>
                             <td>
