@@ -2274,6 +2274,15 @@ async def get_performance(
             return {
                 "source": "live_trades",
                 "data_type": "executed_trades",
+                "financials": {
+                    "realized_pnl": 0,
+                    "unrealized_pnl": None,
+                    "fees": 0,
+                    "currency": "GBP",
+                    "cost_basis_method": "FIFO position lifecycle / verified fills",
+                    "pnl_source": "closed position lifecycle",
+                    "unrealized_status": "unavailable"
+                },
                 "summary": {
                     "total_pnl": 0,
                     "win_rate": None,
@@ -2292,8 +2301,27 @@ async def get_performance(
         filtered = trades
         if product:
             filtered = [t for t in filtered if t.get('product_id') == product]
-        
-        total_pnl = sum(t.get('pnl', 0) or 0 for t in filtered)
+
+        # Financial totals come from closed position lifecycles, not by adding
+        # fill rows to lifecycle rows. Fills remain the authoritative execution
+        # record; lifecycle P&L is the authoritative realized result.
+        closed_positions = db_manager.get_closed_positions(limit=10000) or []
+        if trade_type:
+            closed_positions = [p for p in closed_positions if (p.get('trade_type') or '').lower() == trade_type.lower()]
+        if product:
+            closed_positions = [p for p in closed_positions if p.get('product_id') == product]
+        realized_pnl = sum(float(p.get('pnl') or 0) for p in closed_positions if p.get('pnl') is not None)
+        fees = sum(float(t.get('fees') or 0) for t in filtered if t.get('status') == 'filled')
+        financials = {
+            "realized_pnl": round(realized_pnl, 2),
+            "unrealized_pnl": None,
+            "fees": round(fees, 2),
+            "currency": "GBP",
+            "cost_basis_method": "FIFO position lifecycle / verified fills",
+            "pnl_source": "closed position lifecycle",
+            "unrealized_status": "unavailable",
+        }
+        total_pnl = financials["realized_pnl"]
         winning = [t for t in filtered if (t.get('pnl', 0) or 0) > 0]
         losing = [t for t in filtered if (t.get('pnl', 0) or 0) < 0]
         
@@ -2400,6 +2428,7 @@ async def get_performance(
         return {
             "source": "live_trades",
             "data_type": "executed_trades",
+            "financials": financials,
             "trade_type_filter": trade_type or "all",
             "summary": {
                 "total_pnl": round(total_pnl, 2),
