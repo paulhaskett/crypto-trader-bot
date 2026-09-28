@@ -10,6 +10,7 @@ import time
 import logging
 import threading
 import fcntl
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -126,7 +127,26 @@ async def security_and_audit_middleware(request: Request, call_next):
     """Add security headers and audit mutation requests without logging secrets."""
     request_id = request.headers.get('X-Request-ID') or uuid4().hex
     started = time.monotonic()
-    response = await call_next(request)
+    mutating = request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}
+    auth_exempt = request.url.path in {'/api/health', '/api/auth/status'}
+    auth_error = None
+    if mutating and not auth_exempt:
+        auth_token = os.getenv('DASHBOARD_AUTH_TOKEN', '').strip()
+        if not auth_token:
+            auth_error = (503, 'auth_not_configured', 'Mutation routes are disabled until DASHBOARD_AUTH_TOKEN is configured')
+        else:
+            supplied = request.headers.get('Authorization', '')
+            bearer = supplied[7:] if supplied.startswith('Bearer ') else request.headers.get('X-Dashboard-Token', '')
+            csrf = request.headers.get('X-Dashboard-CSRF', '')
+            if not secrets.compare_digest(bearer, auth_token):
+                auth_error = (401, 'auth_required', 'Valid dashboard token required')
+            elif not secrets.compare_digest(csrf, auth_token):
+                auth_error = (403, 'csrf_required', 'CSRF header required')
+    if auth_error:
+        status_code, error_code, message = auth_error
+        response = JSONResponse(status_code=status_code, content={'status': 'error', 'error_code': error_code, 'message': message, 'request_id': request_id})
+    else:
+        response = await call_next(request)
     response.headers['X-Request-ID'] = request_id
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
@@ -2817,6 +2837,15 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/api/auth/status")
+async def auth_status():
+    """Report whether mutation authentication is configured without exposing secrets."""
+    return {
+        "status": "success",
+        "auth_configured": bool(os.getenv('DASHBOARD_AUTH_TOKEN', '').strip()),
+        "csrf_mode": "same-token-header",
     }
 
 @app.get("/api/resources")
