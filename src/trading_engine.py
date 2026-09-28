@@ -215,6 +215,13 @@ class TradingEngine:
                     "refusing to trade with unknown wallet state"
                 )
             current_price = current_prices.get(product_id, 0)
+            existing = existing_positions.get(product_id)
+            if current_price is None or float(current_price) <= 0:
+                if wallet_balance > 0.00000001 or existing:
+                    raise RuntimeError(
+                        f"Market price unavailable for {product_id}; "
+                        "refusing wallet position reconciliation"
+                    )
 
             # --- DUST / phantom-position guard ---
             # If wallet balance is essentially zero but DB thinks there's an open
@@ -275,7 +282,10 @@ class TradingEngine:
             if avg_cost > 0:
                 entry_price = avg_cost
             else:
-                entry_price = current_price if current_price > 0 else wallet_balance  # last-resort fallback
+                # A live position without FIFO cost basis may use the verified
+                # market quote as a temporary observation, but never the wallet
+                # quantity (different units) as a price.
+                entry_price = current_price
 
             # --- Sanity-check entry_price against market price -------------
             # If entry_price is wildly different from the current market price
@@ -593,7 +603,7 @@ class TradingEngine:
                 return False
             
             # Check if trading is paused
-            should_pause, reason = risk_manager.should_pause_trading()
+            should_pause, reason = risk_manager.should_pause_trading(is_paper_trading=self.paper_trading)
             if should_pause:
                 logger.info(f"Trading paused: {reason}")
                 return False

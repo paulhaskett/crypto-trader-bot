@@ -42,6 +42,8 @@ class RiskManager:
     def __init__(self):
         """Initialize the risk manager."""
         self.portfolio_value = 0.0
+        self.portfolio_data_available = False
+        self.portfolio_data_reason = 'not_loaded'
         self.daily_pnl = 0.0
         self.daily_start_time = datetime.now().date()
         self.daily_start_time_set = True
@@ -73,42 +75,44 @@ class RiskManager:
         """
         try:
             if is_paper_trading:
-                # Paper trading: use simulated portfolio value
                 self.portfolio_value = settings.PAPER_TRADING_PORTFOLIO_VALUE
+                self.portfolio_data_available = True
+                self.portfolio_data_reason = 'paper_portfolio'
                 logger.info(f"Paper trading mode - using simulated portfolio: ${self.portfolio_value:.2f}")
-            else:
-                # Live trading: use real Coinbase balances
-                accounts = coinbase_api.get_accounts()
+                return
 
-                total_value = 0.0
-                prices = data_collector.get_current_prices()
+            accounts = coinbase_api.get_accounts()
+            if not coinbase_api.last_accounts_fetch_ok:
+                raise RuntimeError('Coinbase account data unavailable')
+            prices = data_collector.get_current_prices() or {}
+            total_value = 0.0
+            for account in accounts:
+                currency = account['currency']
+                balance = float(account.get('available', 0) or 0)
+                if currency == 'USD':
+                    total_value += balance
+                elif currency == 'GBP':
+                    gbp_usd_rate = currency_converter.get_exchange_rate('GBP', 'USD')
+                    if not gbp_usd_rate or gbp_usd_rate <= 0:
+                        raise RuntimeError('GBP/USD exchange rate unavailable')
+                    total_value += balance * gbp_usd_rate
+                elif balance > 0 and currency in ['BTC', 'ETH', 'SOL', 'LTC', 'XRP', 'DOT', 'ADA', 'LINK', 'UNI']:
+                    symbol = f"{currency}-USD"
+                    price = prices.get(symbol)
+                    if not price or price <= 0:
+                        raise RuntimeError(f'Price unavailable for {symbol}')
+                    total_value += balance * price
 
-                for account in accounts:
-                    currency = account['currency']
-                    balance = account['available']
-
-                    if currency == 'USD':
-                        total_value += balance
-                    elif currency == 'GBP':
-                        # Convert GBP to USD using actual exchange rate
-                        gbp_usd_rate = currency_converter.get_exchange_rate('GBP', 'USD')
-                        if gbp_usd_rate is None:
-                            gbp_usd_rate = 1.0  # Fallback
-                        total_value += balance * gbp_usd_rate
-                    elif currency in ['BTC', 'ETH', 'SOL', 'LTC', 'XRP', 'DOT', 'ADA', 'LINK', 'UNI']:
-                        symbol = f"{currency}-USD"
-                        if symbol in prices:
-                            total_value += balance * prices[symbol]
-
-                self.portfolio_value = total_value
-                logger.info(f"Live trading mode - using real portfolio: ${self.portfolio_value:.2f}")
+            self.portfolio_value = total_value
+            self.portfolio_data_available = True
+            self.portfolio_data_reason = 'live_accounts_and_prices'
+            logger.info(f"Live trading mode - using real portfolio: ${self.portfolio_value:.2f}")
 
         except Exception as e:
             logger.error(f"Failed to update portfolio value: {e}")
-            # Fallback to paper trading value if update fails
-            if self.portfolio_value == 0.0:
-                self.portfolio_value = settings.PAPER_TRADING_PORTFOLIO_VALUE
-                logger.info(f"Using fallback portfolio value: ${self.portfolio_value:.2f}")
+            self.portfolio_value = 0.0
+            self.portfolio_data_available = False
+            self.portfolio_data_reason = str(e)
 
     def get_min_trade_amount(self, product_id: str, entry_price: float) -> float:
         """
@@ -165,6 +169,13 @@ class RiskManager:
             # Update portfolio value with correct mode
             self._update_portfolio_value(is_paper_trading=is_paper)
 
+            if not self.portfolio_data_available:
+                return {
+                    'size': 0.0,
+                    'reason': f'Risk data unavailable: {self.portfolio_data_reason}',
+                    'risk_amount': 0.0,
+                    'data_status': 'unavailable'
+                }
             if self.portfolio_value <= 0:
                 return {
                     'size': 0.0,
@@ -575,14 +586,19 @@ class RiskManager:
         self._risk_cache_time = now
         return fresh_data
 
-    def should_pause_trading(self) -> Tuple[bool, str]:
+    def should_pause_trading(self, is_paper_trading: Optional[bool] = None) -> Tuple[bool, str]:
         """
         Check if trading should be paused due to risk limits.
 
         Returns:
             Tuple of (should_pause, reason)
         """
-        risk_check = self.check_portfolio_risk()
+        if is_paper_trading is None:
+            is_paper_trading = db_manager.get_paper_trading()
+        risk_check = self.check_portfolio_risk(is_paper_trading=is_paper_trading)
+
+        if not self.portfolio_data_available:
+            return True, f"Risk data unavailable: {self.portfolio_data_reason}"
 
         if risk_check['risk_status'] == 'daily_loss_limit':
             return True, "Daily loss limit exceeded"

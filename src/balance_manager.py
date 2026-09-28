@@ -50,6 +50,8 @@ class BalanceManager:
             gbp_balance = 0.0
             try:
                 accounts = coinbase_api.get_accounts()
+                if not coinbase_api.last_accounts_fetch_ok:
+                    raise RuntimeError('Coinbase account data unavailable')
                 logger.info(f"Total accounts found: {len(accounts)}")
                 for i, account in enumerate(accounts):
                     currency = account.get('currency', 'Unknown')
@@ -67,6 +69,7 @@ class BalanceManager:
                         break
             except Exception as e:
                 logger.error(f"Error getting GBP balance from Coinbase API: {e}")
+                raise
             
             # Determine alert level
             alert_level = self._get_alert_level(gbp_balance)
@@ -98,7 +101,8 @@ class BalanceManager:
                 'alert_message': 'Unable to check balance',
                 'recommendation': 'Check API connection',
                 'last_check': datetime.now().strftime("%H:%M:%S"),
-                'trading_allowed': True
+                'trading_allowed': False,
+                'data_status': 'unavailable'
             }
     
     def should_trade(self, trade_size_gbp: float) -> Tuple[bool, str]:
@@ -116,21 +120,19 @@ class BalanceManager:
             gbp_balance = balance_status['gbp_balance']
             alert_level = balance_status['alert_level']
             
-            # Always allow trades (non-blocking), but provide guidance
+            if not balance_status.get('trading_allowed', False):
+                return False, "GBP balance unavailable"
+            if alert_level == 'critical':
+                return False, f"GBP balance critical (£{gbp_balance:.2f})"
+
             should_trade = True
             reason = "Trade allowed (monitoring active)"
-            
-            # Add recommendations based on balance level
-            if alert_level == 'critical':
-                reason = f"Trade allowed but GBP critical (£{gbp_balance:.2f}). Consider top-up."
-            elif alert_level == 'warning':
-                reason = f"Trade allowed but GBP low (£{gbp_balance:.2f}). Monitor balance."
             
             return should_trade, reason
             
         except Exception as e:
             logger.error(f"Error evaluating trade: {e}")
-            return True, "Unable to check balance - proceeding with trade"
+            return False, "Unable to check balance - trading blocked"
     
     def _get_alert_level(self, gbp_balance: float) -> str:
         """Determine alert level based on GBP balance."""
