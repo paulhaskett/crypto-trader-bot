@@ -215,8 +215,7 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const API = {
-            trades: '/api/recent_trades',
-            closed: '/api/closed_positions'
+            ledger: '/api/ledger'
         };
 
         let allTrades = [];
@@ -250,57 +249,49 @@
             tbody.innerHTML = '<tr><td colspan=\"11\" class=\"text-center py-5\"><div class=\"spinner-border text-primary\" role=\"status\"></div><p class=\"mt-2 text-muted\">Loading...</p></td></tr>';
 
             try {
-                const [tradesRes, closedRes] = await Promise.all([
-                    fetchJSON(API.trades + '?limit=500'),
-                    fetchJSON(API.closed + '?limit=500')
-                ]);
-
+                const ledger = await fetchJSON(API.ledger + '?limit=500');
                 allTrades = [];
 
-                if (tradesRes?.trades) {
-                    tradesRes.trades.forEach(t => {
-                        const dateStr = t.date || '';
-                        const timeStr = t.timestamp || '';
-                        allTrades.push({
-                            product_id: t.product_id,
-                            side: t.side,
-                            size: t.size || 0,
-                            price: t.price || t.executed_value || 0,
-                            entry_price: t.entry_price || null,
-                            exit_price: t.exit_price || null,
-                            pnl: t.pnl || 0,
-                            pnl_pct: t.pnl_pct || 0,
-                            date: dateStr,
-                            time: timeStr,
-                            status: t.status || 'filled',
-                            exit_reason: t.exit_reason || '',
-                            type: 'trade'
-                        });
+                for (const fill of (ledger?.fills || [])) {
+                    const ts = fill.timestamp || '';
+                    const parts = ts.split('T');
+                    allTrades.push({
+                        row_id: fill.row_id,
+                        product_id: fill.product_id,
+                        side: fill.side,
+                        size: fill.size || 0,
+                        price: fill.price || 0,
+                        fees: fill.fees || 0,
+                        pnl: fill.pnl,
+                        date: parts[0] || '',
+                        time: parts[1] ? parts[1].substring(0, 8) : '',
+                        status: fill.status || 'unknown',
+                        order_id: fill.order_id,
+                        row_type: 'fill',
+                        source: fill.source
                     });
                 }
 
-                if (closedRes?.positions) {
-                    closedRes.positions.forEach(p => {
-                        const ts = (p.date || '') + 'T' + (p.time || '');
-                        const parts = ts.split('T');
-                        const dateStr = parts[0] || '';
-                        const timeStr = parts[1] ? parts[1].substring(0, 5) : '';
-                        const entryValue = (p.entry_price || 0) * (p.size || 0);
-                        const pnlPct = entryValue > 0 ? ((p.pnl || 0) / entryValue * 100) : 0;
-                        allTrades.push({
-                            product_id: p.product_id,
-                            side: p.side,
-                            size: p.size || 0,
-                            price: p.entry_price || 0,
-                            exit_price: p.exit_price || null,
-                            pnl: p.pnl || 0,
-                            pnl_pct: pnlPct,
-                            date: dateStr,
-                            time: timeStr,
-                            status: p.status || 'closed',
-                            exit_reason: p.exit_reason || '',
-                            type: 'closed_position'
-                        });
+                for (const position of (ledger?.position_lifecycles || [])) {
+                    const ts = position.closed_at || position.opened_at || '';
+                    const parts = ts.split('T');
+                    const entryValue = (position.entry_price || 0) * (position.size || 0);
+                    allTrades.push({
+                        row_id: position.row_id,
+                        product_id: position.product_id,
+                        side: position.side,
+                        size: position.size || 0,
+                        price: position.entry_price || 0,
+                        entry_price: position.entry_price || 0,
+                        exit_price: position.exit_price || null,
+                        pnl: position.pnl,
+                        pnl_pct: entryValue > 0 ? ((position.pnl || 0) / entryValue * 100) : 0,
+                        date: parts[0] || '',
+                        time: parts[1] ? parts[1].substring(0, 8) : '',
+                        status: 'closed',
+                        exit_reason: position.exit_reason || '',
+                        row_type: 'position_lifecycle',
+                        source: position.source
                     });
                 }
 
@@ -310,7 +301,7 @@
                     return dateB.localeCompare(dateA);
                 });
 
-                updateStats();
+                updateStats(ledger?.summary || {});
                 filterTrades();
 
             } catch (error) {
@@ -319,13 +310,16 @@
             }
         }
 
-        function updateStats() {
-            const total = allTrades.length;
-            const winning = allTrades.filter(t => (t.pnl || 0) > 0).length;
-            const losing = allTrades.filter(t => (t.pnl || 0) < 0).length;
-            const winRate = total > 0 ? (winning / total * 100).toFixed(1) : 0;
-            const totalPnl = allTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-            const avgPnl = total > 0 ? totalPnl / total : 0;
+        function updateStats(summary = {}) {
+            const fills = allTrades.filter(t => t.row_type === 'fill');
+            const lifecycles = allTrades.filter(t => t.row_type === 'position_lifecycle');
+            const total = summary.fill_count ?? fills.length;
+            const winning = lifecycles.filter(t => (t.pnl || 0) > 0).length;
+            const losing = lifecycles.filter(t => (t.pnl || 0) < 0).length;
+            const lifecycleCount = summary.position_lifecycle_count ?? lifecycles.length;
+            const winRate = lifecycleCount > 0 ? (winning / lifecycleCount * 100).toFixed(1) : 0;
+            const totalPnl = Number(summary.realized_pnl || 0);
+            const avgPnl = lifecycleCount > 0 ? totalPnl / lifecycleCount : 0;
 
             document.getElementById('stat-total').textContent = total;
             document.getElementById('stat-winning').textContent = winning;
@@ -392,7 +386,7 @@ tbody.innerHTML = pageTrades.map(t => `
                         <td>${t.exit_price ? '£' + t.exit_price.toFixed(2) : '-'}</td>
                         <td class=\"${(t.pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}\">${formatGBP(t.pnl || 0)}</td>
                         <td class=\"${(t.pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}\">${t.pnl_pct !== undefined ? (t.pnl_pct >= 0 ? '+' : '') + t.pnl_pct.toFixed(2) + '%' : '-'}</td>
-                        <td><span class=\"badge bg-secondary\">${t.status}</span></td>
+                        <td><span class="badge bg-secondary">${t.row_type === 'fill' ? 'FILL' : 'POSITION'} · ${t.status}</span></td>
                         <td>${t.exit_reason || '-'}</td>
                     </tr>
                 `).join('');

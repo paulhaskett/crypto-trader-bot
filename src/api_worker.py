@@ -2013,6 +2013,72 @@ async def close_position(position_id: str):
         return {"status": "error", "message": str(e)}
 
 
+@app.get("/api/ledger")
+async def get_canonical_ledger(limit: int = 500):
+    """Return fills and position lifecycles as distinct, non-double-counted rows."""
+    try:
+        db = load_db_manager()
+        fills = []
+        for fill in db.get_trades(limit=limit) or []:
+            timestamp = fill.get('timestamp')
+            if hasattr(timestamp, 'isoformat'):
+                timestamp = timestamp.isoformat()
+            fills.append({
+                "row_id": f"fill:{fill.get('id')}",
+                "row_type": "fill",
+                "fill_id": fill.get('id'),
+                "order_id": fill.get('order_id'),
+                "product_id": fill.get('product_id'),
+                "side": (fill.get('side') or '').upper(),
+                "size": fill.get('size', 0) or 0,
+                "price": fill.get('price', 0) or 0,
+                "fees": fill.get('fees', 0) or 0,
+                "pnl": fill.get('pnl'),
+                "status": fill.get('status', 'unknown'),
+                "trade_type": fill.get('trade_type'),
+                "timestamp": str(timestamp) if timestamp else None,
+                "source": "verified_fill_record",
+            })
+
+        lifecycles = []
+        for position in db.get_closed_positions(limit=limit) or []:
+            lifecycles.append({
+                "row_id": f"position:{position.get('position_id')}",
+                "row_type": "position_lifecycle",
+                "position_id": position.get('position_id'),
+                "product_id": position.get('product_id'),
+                "side": (position.get('side') or '').upper(),
+                "size": position.get('size', 0) or 0,
+                "entry_price": position.get('entry_price', 0) or 0,
+                "exit_price": position.get('exit_price', 0) or 0,
+                "pnl": position.get('pnl'),
+                "exit_reason": position.get('exit_reason'),
+                "status": "closed",
+                "trade_type": position.get('trade_type'),
+                "opened_at": position.get('opened_at'),
+                "closed_at": position.get('closed_at'),
+                "source": "position_lifecycle",
+            })
+
+        realized = sum(float(row.get('pnl') or 0) for row in lifecycles if row.get('pnl') is not None)
+        return attach_meta({
+            "status": "success",
+            "fills": fills,
+            "position_lifecycles": lifecycles,
+            "summary": {
+                "fill_count": len(fills),
+                "position_lifecycle_count": len(lifecycles),
+                "realized_pnl": round(realized, 2),
+                "currency": "GBP",
+                "cost_basis_method": "FIFO position lifecycle / verified fills",
+                "pnl_source": "closed position lifecycle; fills remain separate",
+            },
+        }, data_status="fresh", source="database")
+    except Exception as e:
+        logger.error(f"Canonical ledger error: {e}")
+        return attach_meta({"status": "error", "message": str(e)}, data_status="unavailable", source="database", error_code="ledger_unavailable")
+
+
 @app.get("/api/trades/stats")
 async def get_trades_stats(
     trade_type: Optional[str] = None,
