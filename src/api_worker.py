@@ -1839,16 +1839,35 @@ async def get_risk_status():
 async def control_action(action: str):
     """Control bot actions (start, stop, emergency_stop, retrain, resync)."""
     try:
-        # Note: In API worker mode, these actions may not work as expected
-        # since the trading engine runs in a separate process
-        if action == 'start':
-            return {"status": "success", "message": "Trading started", "trading_active": True}
-        elif action == 'stop':
-            return {"status": "success", "message": "Trading stopped", "trading_active": False}
-        elif action == 'emergency_stop':
-            return {"status": "success", "message": "Emergency stop executed", "trading_active": False}
+        db = load_db_manager()
+        if action in {'start', 'stop', 'emergency_stop'}:
+            requested_active = action == 'start'
+            if not db.set_trading_active(requested_active):
+                return {
+                    "status": "error",
+                    "command_state": "failed",
+                    "message": "Could not persist trading command"
+                }
+            acknowledged_active = db.get_trading_active()
+            if acknowledged_active != requested_active:
+                return {
+                    "status": "error",
+                    "command_state": "unknown",
+                    "message": "Trading command was not confirmed by read-back",
+                    "trading_active": acknowledged_active
+                }
+            return {
+                "status": "success",
+                "command_state": "acknowledged",
+                "message": "Emergency stop persisted" if action == 'emergency_stop' else f"Trading {'started' if requested_active else 'stopped'}",
+                "trading_active": acknowledged_active
+            }
         elif action == 'retrain':
-            return {"status": "success", "message": "Retrain initiated", "details": {}}
+            return {
+                "status": "error",
+                "command_state": "unsupported",
+                "message": "Use /api/models/retrain for model retraining"
+            }
         elif action == 'resync':
             # Force resync positions with Coinbase wallet
             from src.database import db_manager

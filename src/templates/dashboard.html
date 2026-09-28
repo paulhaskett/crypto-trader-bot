@@ -353,7 +353,9 @@
             risk: '/api/risk/status',
             control: '/api/control',
             countdown: '/api/countdown',
-            gbpBalance: '/api/gbp-balance'
+            gbpBalance: '/api/gbp-balance',
+            retrain: '/api/models/retrain',
+            retrainProgress: '/api/models/retrain_progress'
         };
 
         const INTERVALS = { summary: 30000, signals: 60000, positions: 30000, countdown: 5000, gbp: 30000, resources: 30000 };
@@ -446,8 +448,37 @@
         }
 
         async function retrainModels() {
-            showToast('Retraining models...', 'info');
-            await controlBot('retrain');
+            const btn = document.activeElement;
+            const orig = btn?.innerHTML || '';
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+            try {
+                const r = await fetch(API.retrain, { method: 'POST' });
+                const d = await r.json();
+                if (d.status === 'started' || d.status === 'running') {
+                    showToast(d.message || 'Retraining started', 'info');
+                    pollDashboardRetrain();
+                } else if (d.status === 'success') {
+                    showToast(d.message || 'Retraining completed', 'success');
+                    updateSummary();
+                } else {
+                    showToast(d.message || 'Retraining failed', 'danger');
+                    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+                }
+            } catch {
+                showToast('Retraining request failed', 'danger');
+                if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+            }
+        }
+
+        async function pollDashboardRetrain() {
+            const status = await fetchJSON(API.retrainProgress);
+            if (status?.in_progress) {
+                showToast(`Retraining: ${status.current_model || 'starting'} (${status.completed || 0}/${status.total || 0})`, 'info');
+                setTimeout(pollDashboardRetrain, 5000);
+            } else if (status?.result) {
+                showToast(status.result.message || 'Retraining finished', status.result.status === 'success' ? 'success' : 'danger');
+                updateSummary();
+            }
         }
 
         async function closePosition(id, pair) {
