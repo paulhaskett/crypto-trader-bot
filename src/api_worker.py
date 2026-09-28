@@ -1875,34 +1875,63 @@ async def control_action(action: str):
             from src.data_collector import data_collector
             from config.settings import settings
             
-            wallet_balances = {}
-            for product_id in settings.PRODUCT_IDS:
+            accounts = coinbase_api.get_accounts()
+            if not getattr(coinbase_api, 'last_accounts_fetch_ok', False):
+                return {
+                    "status": "error",
+                    "result_code": "account_fetch_unavailable",
+                    "message": "Coinbase account data unavailable; resync made no changes"
+                }
+            wallet_balances = {
+                account.get('currency'): float(account.get('available', 0) or 0)
+                for account in accounts
+                if account.get('currency')
+            }
+            current_prices = data_collector.get_current_prices() or {}
+            positions = db_manager.load_open_positions(trade_type='live') or {}
+
+            # Validate the complete read set before changing any position. A
+            # missing price or wallet currency must not become zero/current-price
+            # cost basis in the database.
+            validation_errors = []
+            for product_id, pos in positions.items():
                 base_currency = product_id.split('-')[0]
-                balance = coinbase_api.get_account_balance(base_currency)
-                if balance > 0:
-                    wallet_balances[base_currency] = balance
-            
-            current_prices = data_collector.get_current_prices()
-            
-            # Update each position to match wallet
-            positions = db_manager.load_open_positions(trade_type='live')
+                wallet_size = wallet_balances.get(base_currency)
+                current_price = current_prices.get(product_id)
+                if wallet_size is None:
+                    validation_errors.append(f"wallet:{base_currency}")
+                if not current_price or float(current_price) <= 0:
+                    validation_errors.append(f"price:{product_id}")
+                if wallet_size is not None and wallet_size <= 0:
+                    validation_errors.append(f"zero_wallet:{base_currency}")
+            if validation_errors:
+                return {
+                    "status": "error",
+                    "result_code": "reconciliation_validation_failed",
+                    "message": "Resync made no changes; validation failed",
+                    "validation_errors": validation_errors
+                }
+
             updated = 0
             for product_id, pos in positions.items():
                 base_currency = product_id.split('-')[0]
-                wallet_size = wallet_balances.get(base_currency, 0)
-                current_price = current_prices.get(product_id, pos.get('current_price', 0))
-                
                 db_manager.save_open_position({
                     'product_id': product_id,
-                    'side': 'buy',
-                    'size': wallet_size,
-                    'entry_price': current_price,
+                    'side': pos.get('side', 'buy'),
+                    'size': wallet_balances[base_currency],
+                    'current_price': float(current_prices[product_id]),
                     'trade_type': 'live',
                     'status': 'open'
                 })
                 updated += 1
-            
-            return {"status": "success", "message": f"Resynced {updated} positions with wallet", "wallets": wallet_balances}
+
+            return {
+                "status": "success",
+                "result_code": "reconciled",
+                "message": f"Resynced {updated} positions with wallet",
+                "wallets": wallet_balances,
+                "updated": updated
+            }
         else:
             return {"status": "error", "message": f"Unknown action: {action}"}
     except Exception as e:
@@ -1922,47 +1951,63 @@ async def close_position(position_id: str):
         position = next((p for p in positions if p['position_id'] == position_id), None)
 
         if not position:
-            return {"status": "error", "message": "Position not found"}
+            return {"status": "error", "result_code": "position_not_found", "message": "Position not found"}
 
         product_id = position['product_id']
         current_price = coinbase_api.get_product_ticker(product_id)
         if not current_price or 'price' not in current_price:
-            return {"status": "error", "message": f"Could not get price for {product_id}"}
+            return {"status": "error", "result_code": "price_unavailable", "message": f"Could not get price for {product_id}"}
+        if current_price.get('data_status') == 'unavailable' or current_price.get('is_fallback'):
+            return {"status": "error", "result_code": "price_unavailable", "message": f"Current Coinbase price unavailable for {product_id}; no order submitted"}
 
         exit_price = float(current_price['price'])
         size = float(position.get('remaining_size') or position.get('size') or 0)
         entry_price = position['entry_price']
         if size <= 0:
-            return {"status": "error", "message": "Position has no sellable residual size"}
+            return {"status": "error", "result_code": "no_sellable_residual", "message": "Position has no sellable residual size"}
 
         # Manual close must execute and verify the Coinbase sell before the
         # database row is closed. Previously this endpoint only changed the
         # local record, leaving wallet inventory and the dashboard divergent.
         from src.database import db_manager as _db
+        order_result = None
         if not _db.get_paper_trading():
             break_even = float(entry_price) * (1.0 + settings.MAKER_FEE_RATE + settings.TAKER_FEE_RATE)
             if exit_price < break_even:
                 return {
                     "status": "error",
+                    "result_code": "blocked_below_break_even",
                     "message": f"Manual close blocked below break-even (£{break_even:.2f})"
                 }
             order_result = coinbase_api.place_market_order(product_id, 'sell', size)
             if not order_result or order_result.get('success') is not True:
-                return {"status": "error", "message": "Coinbase sell was not verified"}
+                return {"status": "error", "result_code": "order_unverified", "message": "Coinbase sell was not verified"}
             filled_size = float(order_result.get('size', 0.0))
             if filled_size + 1e-9 < size:
-                return {"status": "error", "message": "Partial Coinbase fill; position left open for reconciliation"}
+                return {"status": "error", "result_code": "partial_fill", "message": "Partial Coinbase fill; position left open for reconciliation"}
             exit_price = float(order_result.get('price') or exit_price)
             if exit_price < break_even:
-                return {"status": "error", "message": "Verified fill was below break-even; reconciliation required"}
+                return {"status": "error", "result_code": "fill_below_break_even", "message": "Verified fill was below break-even; reconciliation required"}
         pnl = (exit_price - entry_price) * size
 
         result = db_manager.close_open_position(position_id, exit_price, pnl, "manual_close", "manual")
         if result:
+            remaining = db_manager.get_all_open_positions_detailed()
+            if any(p.get('position_id') == position_id for p in remaining):
+                return {"status": "error", "result_code": "database_close_failed", "message": "Close was not confirmed by database read-back"}
             risk_manager.close_position(position_id, pnl)
-            return {"status": "success", "message": f"{product_id} closed", "exit_price": exit_price, "pnl": round(pnl, 2)}
+            return {
+                "status": "success",
+                "result_code": "closed",
+                "message": f"{product_id} closed",
+                "position_id": position_id,
+                "order_id": (order_result or {}).get('order_id') if not _db.get_paper_trading() else None,
+                "exit_price": exit_price,
+                "size": size,
+                "pnl": round(pnl, 2)
+            }
         else:
-            return {"status": "error", "message": "Failed to close position"}
+            return {"status": "error", "result_code": "database_close_failed", "message": "Failed to close position"}
     except Exception as e:
         logger.error(f"Close position error: {e}")
         return {"status": "error", "message": str(e)}

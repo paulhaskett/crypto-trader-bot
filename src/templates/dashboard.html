@@ -483,12 +483,16 @@
 
         async function closePosition(id, pair) {
             if (!confirm(`Close ${pair}?`)) return;
+            const btn = document.activeElement;
+            if (btn) btn.disabled = true;
             try {
                 const r = await fetch(`/api/position/${id}/close`, { method: 'POST' });
                 const d = await r.json();
-                if (d.status === 'success') { showToast(`${pair} closed`, 'success'); updatePositions(); }
-                else showToast(d.message || 'Failed', 'danger');
-            } catch { showToast('Failed', 'danger'); }
+                const detail = d.result_code ? ` [${d.result_code}]` : '';
+                if (d.status === 'success') { showToast(`${pair} closed${detail}`, 'success'); updatePositions(); }
+                else showToast(`${d.message || 'Close failed'}${detail}`, 'danger');
+            } catch { showToast('Close request failed [network_error]', 'danger'); }
+            finally { if (btn) btn.disabled = false; }
         }
 
         async function updateStatus() {
