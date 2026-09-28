@@ -2708,32 +2708,44 @@ async def save_risk_settings(request: Request):
         settings = load_settings()
         db = load_db_manager()
         
+        values = {}
         if 'confidence_threshold' in data:
-            pct = float(data['confidence_threshold']) / 100
-            settings.MODEL_CONFIDENCE_THRESHOLD = pct
-            db.save_user_setting('model_confidence_threshold', str(pct))
-        
+            values['MODEL_CONFIDENCE_THRESHOLD'] = float(data['confidence_threshold']) / 100
         if 'stop_loss' in data:
-            settings.STOP_LOSS_MIN_PERCENT = float(data['stop_loss']) / 100
-            db.save_user_setting('stop_loss_min_percent', str(settings.STOP_LOSS_MIN_PERCENT))
-        
+            values['STOP_LOSS_MIN_PERCENT'] = float(data['stop_loss']) / 100
         if 'take_profit' in data:
-            level = float(data['take_profit'])
-            settings.TAKE_PROFIT_LEVELS = [level, level * 2, level * 3]
-            db.save_user_setting('take_profit_level', str(level))
-        
+            values['TAKE_PROFIT_LEVEL'] = float(data['take_profit'])
         if 'max_position_size' in data:
-            pct = float(data['max_position_size']) / 100
-            settings.MAX_POSITION_SIZE = pct
-            db.save_user_setting('max_position_size', str(pct))
-        
+            values['MAX_POSITION_SIZE'] = float(data['max_position_size']) / 100
         if 'max_concurrent_positions' in data:
-            settings.MAX_CONCURRENT_POSITIONS = int(data['max_concurrent_positions'])
-            db.save_user_setting('max_concurrent_positions', str(settings.MAX_CONCURRENT_POSITIONS))
-        
+            values['MAX_CONCURRENT_POSITIONS'] = int(data['max_concurrent_positions'])
+        settings.validate_runtime_values({k: v for k, v in values.items() if k != 'TAKE_PROFIT_LEVEL'})
+        if 'TAKE_PROFIT_LEVEL' in values and not 0.0 < values['TAKE_PROFIT_LEVEL'] <= 1.0:
+            raise ValueError(f"Invalid or unsafe value for TAKE_PROFIT_LEVEL: {values['TAKE_PROFIT_LEVEL']}")
+
+        db_keys = {
+            'MODEL_CONFIDENCE_THRESHOLD': 'model_confidence_threshold',
+            'STOP_LOSS_MIN_PERCENT': 'stop_loss_min_percent',
+            'TAKE_PROFIT_LEVEL': 'take_profit_level',
+            'MAX_POSITION_SIZE': 'max_position_size',
+            'MAX_CONCURRENT_POSITIONS': 'max_concurrent_positions',
+        }
+        for attr, value in values.items():
+            if not db.save_user_setting(db_keys[attr], str(value)):
+                raise RuntimeError(f"Could not persist {db_keys[attr]}")
+
+        settings.load_from_db()
+        effective = {
+            'confidence_threshold': settings.MODEL_CONFIDENCE_THRESHOLD,
+            'stop_loss': settings.STOP_LOSS_MIN_PERCENT,
+            'take_profit': settings.TAKE_PROFIT_LEVELS[0],
+            'max_position_size': settings.MAX_POSITION_SIZE,
+            'max_concurrent_positions': settings.MAX_CONCURRENT_POSITIONS,
+        }
         return {
             "status": "success",
-            "message": "Risk settings saved"
+            "message": "Risk settings saved and read back",
+            "effective_settings": effective
         }
     except Exception as e:
         logger.error(f"Risk settings save error: {e}")
@@ -2745,11 +2757,17 @@ async def save_display_currency(request: Request):
     """Save display currency preference."""
     try:
         data = await request.json()
-        currency = data.get('value', 'GBP')
+        currency = str(data.get('value', 'GBP')).upper()
+        settings = load_settings()
+        settings.validate_runtime_values({'DISPLAY_CURRENCY': currency})
         db = load_db_manager()
-        db.save_user_setting('display_currency', currency)
+        if not db.save_user_setting('display_currency', currency):
+            raise RuntimeError('Could not persist display_currency')
+        effective = db.get_user_setting('display_currency')
+        if effective != currency:
+            raise RuntimeError('display_currency read-back mismatch')
         logger.info(f"Display currency set to {currency}")
-        return {"status": "success", "message": f"Display currency set to {currency}"}
+        return {"status": "success", "message": f"Display currency set to {currency}", "effective_value": effective}
     except Exception as e:
         logger.error(f"Display currency save error: {e}")
         return {"status": "error", "message": str(e)}
@@ -2762,10 +2780,15 @@ async def save_market_check_interval(request: Request):
         data = await request.json()
         seconds = int(data.get('value', 2700))
         settings = load_settings()
-        settings.MARKET_CHECK_INTERVAL = seconds
+        settings.validate_runtime_values({'MARKET_CHECK_INTERVAL': seconds})
         db = load_db_manager()
-        db.save_user_setting('market_check_interval', str(seconds))
-        logger.info(f"Market check interval set to {seconds}s ({seconds//60} minutes)")
+        if not db.save_user_setting('market_check_interval', str(seconds)):
+            raise RuntimeError('Could not persist market_check_interval')
+        settings.load_from_db()
+        effective = settings.MARKET_CHECK_INTERVAL
+        if effective != seconds:
+            raise RuntimeError('market_check_interval read-back mismatch')
+        logger.info(f"Market check interval set to {effective}s ({effective//60} minutes)")
         return {
             "status": "success",
             "message": f"Interval set to {seconds//60} minutes",

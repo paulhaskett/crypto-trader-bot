@@ -432,10 +432,15 @@ class Settings:
                 val = db_manager.get_user_setting(db_key)
                 if val is not None:
                     try:
-                        setattr(self, attr, converter(val))
+                        converted = converter(val)
+                        self.validate_runtime_values({attr: converted})
+                        setattr(self, attr, converted)
                         loaded += 1
-                    except Exception:
-                        pass
+                    except Exception as override_error:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            f"Ignoring invalid persisted setting {db_key}: {override_error}"
+                        )
 
             if loaded:
                 import logging
@@ -443,6 +448,24 @@ class Settings:
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Could not load settings from DB: {e}")
+
+    def validate_runtime_values(self, values: dict) -> None:
+        """Validate DB/API overrides before they can affect live trading."""
+        checks = {
+            'MARKET_CHECK_INTERVAL': lambda v: 60 <= int(v) <= 86400,
+            'MODEL_CONFIDENCE_THRESHOLD': lambda v: 0.0 < float(v) <= 1.0,
+            'STOP_LOSS_MIN_PERCENT': lambda v: 0.0 < float(v) <= 0.50,
+            'MAX_POSITION_SIZE': lambda v: 0.0 < float(v) <= 0.50,
+            'MAX_CONCURRENT_POSITIONS': lambda v: 1 <= int(v) <= len(self.PRODUCT_IDS),
+            'DISPLAY_CURRENCY': lambda v: str(v).upper() in {'GBP', 'USD'},
+            'TRAILING_STOP_PERCENT': lambda v: 0.0 < float(v) <= 0.50,
+            'TRAILING_ACTIVATION_BUFFER': lambda v: 0.0 <= float(v) <= 0.50,
+            'TAKE_PROFIT_LEVELS': lambda v: all(0.0 < float(item) <= 1.0 for item in v),
+        }
+        for attr, value in values.items():
+            check = checks.get(attr)
+            if check and not check(value):
+                raise ValueError(f"Invalid or unsafe value for {attr}: {value!r}")
 
     def _validate_configuration(self):
         """Validate that all required settings are present."""
