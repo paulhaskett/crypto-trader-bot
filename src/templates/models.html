@@ -120,7 +120,7 @@
                          <div class="card-body text-center">
                              <i class="fas fa-cubes card-icon mb-2"></i>
                              <h6 class="text-muted">Model Type</h6>
-                             <h4 class="text-success">4-Model Ensemble</h4>
+                             <h4 class="text-success">Runtime Model Set</h4>
                              <small class="text-muted" id="modelTypeText">Loading ensemble...</small>
                          </div>
                      </div>
@@ -300,6 +300,15 @@
                     const pf = model.rf_profit_factor || 0;
                     const pnl = model.rf_total_pnl || 0;
                     const winRateClass = winRate >= 50 ? 'bg-success' : winRate >= 40 ? 'bg-warning' : 'bg-danger';
+                    const modelHealth = model.model_health || {};
+                    const modelConfidenceRows = ['rf', 'gb', 'ridge', 'lr', 'mlp']
+                        .filter(type => modelHealth[type])
+                        .map(type => {
+                            const detail = modelHealth[type];
+                            const label = type.toUpperCase();
+                            if (!detail.available) return `<div><span class="badge bg-secondary">${label}</span> Unavailable</div>`;
+                            return `<div><span class="badge bg-secondary">${label}</span> ${detail.signal || '-'} ${(detail.confidence * 100).toFixed(1)}%</div>`;
+                        }).join('');
                     
                     signalsGrid.innerHTML += `
                         <div class="col-md-3 mb-3">
@@ -328,13 +337,18 @@
                                         </div>
                                     </div>
                                     <div class="mb-2">
-                                        <small class="text-muted">Confidence</small>
+                                        <small class="text-muted">${model.display_label || (model.signal === 'HOLD' ? 'HOLD consensus' : 'Adjusted confidence')}</small>
+                                        ${model.signal === 'HOLD' ? '' : `
                                         <div class="progress" style="height: 20px;">
-                                            <div class="progress-bar ${confidenceClass}" 
-                                                 style="width: ${confidencePct}%">
+                                            <div class="progress-bar ${confidenceClass}" style="width: ${confidencePct}%">
                                                 ${confidencePct}%
                                             </div>
                                         </div>
+                                        <small class="text-muted">Raw: ${Math.round((model.raw_confidence ?? model.confidence ?? 0) * 100)}%</small>`}
+                                    </div>
+                                    <div class="small mb-2">
+                                        <small class="text-muted">Individual models</small>
+                                        ${modelConfidenceRows}
                                     </div>
                                     <div>
                                         <small class="text-muted">Regime:</small>
@@ -383,51 +397,23 @@
                     `;
                 });
 
-                // Populate Ensemble Weights Card
+                // Model weights are execution data, not a browser-derived metric.
+                // The API will expose them when the backend has authoritative values;
+                // do not invent equal weights or recompute them from win rates.
                 const weightsContainer = document.getElementById('weightsContainer');
                 const weightsInfo = document.getElementById('weightsInfo');
-                
-                // Simple fallback since API data isn't populating
-                const hasData = (modelsArray && modelsArray.length > 0 && modelsArray[0].rf_win_rate > 0);
-                
-                let rfW=25, lrW=25, mlpW=25, gbW=25, maxRf=0, maxLr=0, maxMlp=0, maxGb=0, modelCount=0;
-                
-                if (hasData) {
-                    modelCount = modelsArray.length;
-                    modelsArray.forEach(m => {
-                        maxRf = Math.max(maxRf, m.rf_win_rate || 0);
-                        maxLr = Math.max(maxLr, m.lr_win_rate || 0);
-                        maxMlp = Math.max(maxMlp, m.mlp_win_rate || 0);
-                        maxGb = Math.max(maxGb, m.gb_win_rate || 0);
-                    });
-                    
-                    // Calculate weights if we have varied win rates
-                    const total = maxRf + maxLr + maxMlp + maxGb;
-                    if (total > 0.2) {
-                        rfW = Math.round(maxRf / total * 100) || 25;
-                        lrW = Math.round(maxLr / total * 100) || 25;
-                        mlpW = Math.round(maxMlp / total * 100) || 25;
-                        gbW = Math.round(maxGb / total * 100) || 25;
-                    }
-                }
-                
-                weightsContainer.innerHTML = `
-                    <div><span class="badge bg-primary">RF</span> ${rfW}% <span class="text-success">(${ (maxRf*100).toFixed(0) }%)</span></div>
-                    <div><span class="badge bg-info">LR</span> ${lrW}% <span class="text-success">(${ (maxLr*100).toFixed(0) }%)</span></div>
-                    <div><span class="badge bg-warning">MLP</span> ${mlpW}% <span class="text-success">(${ (maxMlp*100).toFixed(0) }%)</span></div>
-                    <div><span class="badge bg-success">GB</span> ${gbW}% <span class="text-success">(${ (maxGb*100).toFixed(0) }%)</span></div>
-                `;
-                
-                weightsInfo.textContent = hasData ? `Based on ${modelCount} models | ${new Date().toLocaleTimeString()}` : 'Using equal weights';
-                
-                // Populate Model Type card with dynamic ensemble description
+                weightsContainer.innerHTML = '<div class="text-muted">Backend weights not exposed</div>';
+                weightsInfo.textContent = 'No browser fallback';
+
+                // Show the actual model types returned by the backend.
                 const modelTypeText = document.getElementById('modelTypeText');
                 if (modelTypeText) {
-                    const ensembleStr = `RF ${rfW}% + LR ${lrW}% + MLP ${mlpW}% + GB ${gbW}%`;
-                    modelTypeText.textContent = hasData ? ensembleStr : 'Performance-based weights';
+                    const availableTypes = ['rf', 'lr', 'mlp', 'gb', 'ridge']
+                        .filter(type => modelsArray.some(model => model.model_health?.[type]?.available));
+                    modelTypeText.textContent = availableTypes.length
+                        ? `${availableTypes.length}-model runtime: ${availableTypes.join(' + ').toUpperCase()}`
+                        : 'No model predictions available';
                 }
-                
-                console.log('Ensemble weights populated:', {rf: rfW, lr: lrW, mlp: mlpW, gb: gbW});
 
                 // Populate Trading Metrics Table
                 const metricsBody = document.getElementById('tradingMetricsBody');

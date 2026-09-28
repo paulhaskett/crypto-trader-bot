@@ -30,6 +30,7 @@ TEMPLATES_DIR = BASE_DIR / 'src' / 'templates'
 from src.cache_manager import SIGNAL_CACHE_FILE, LAST_CYCLE_FILE
 from src.portfolio_utils import account_value_gbp
 from src.entry_confirmation import confirm_trough_rebound
+from src.model_status import build_model_health
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1492,6 +1493,7 @@ async def get_models_status():
             signal = signal_data.get('action', 'HOLD')
             confidence = signal_data.get('confidence', 0)
             regime = signal_data.get('regime', 'neutral')
+            model_health = build_model_health(signal_data)
             
             # Extract individual model signals from ensemble
             rf_pred = signal_data.get('rf_prediction')
@@ -1536,6 +1538,11 @@ async def get_models_status():
                 # Signal data
                 'signal': signal,
                 'confidence': confidence,
+                'confidence_kind': model_health['confidence_kind'],
+                'display_label': model_health['display_label'],
+                'raw_confidence': model_health['raw_confidence'],
+                'adjusted_confidence': model_health['adjusted_confidence'],
+                'model_health': model_health['models'],
                 'regime': regime,
                 'agreement': signal_data.get('agreement', 0) or 0,
                 'unanimous': signal_data.get('agreement', 0) == 1.0,
